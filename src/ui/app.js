@@ -13,6 +13,7 @@
     mobileStatus: null,
     mobileToken: null,
     qrExpiryTimer: null,
+    collapsedHosts: new Set(),
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -109,19 +110,78 @@
     const sessions = state.sessions.filter(sessionMatches);
     $('#trafficCount').textContent = String(state.sessions.length);
     $('#trafficEmpty').classList.toggle('visible', sessions.length === 0);
-    list.innerHTML = sessions.map((session) => {
-      const total = Number(session.requestBodyBytes || 0) + Number(session.responseBodyBytes || 0);
-      return '<button class="session-row session-grid ' + (state.selected?.id === session.id ? 'selected' : '') + '" data-session="' + escapeHtml(session.id) + '" role="listitem">' +
-        '<span class="method">' + escapeHtml(session.method) + '</span>' +
-        '<span class="status-code ' + statusClass(session) + '">' + escapeHtml(session.error ? 'ERR' : (session.statusCode ?? '…')) + '</span>' +
-        '<span class="host-path"><strong>' + escapeHtml(session.host) + (session.mapped ? '<span class="mapped-badge">MAPPED</span>' : '') + '</strong><span>' + escapeHtml(session.path) + '</span></span>' +
-        '<span class="cell-muted">' + escapeHtml(formatDuration(session.durationMs)) + '</span>' +
-        '<span class="cell-muted">' + escapeHtml(formatBytes(total)) + '</span>' +
-      '</button>';
-    }).join('');
+
+    // Group sessions by host
+    const hostGroups = new Map();
+    for (const session of sessions) {
+      const host = session.host;
+      if (!hostGroups.has(host)) {
+        hostGroups.set(host, []);
+      }
+      hostGroups.get(host).push(session);
+    }
+
+    // Sort each group newest-first and calculate most recent timestamp
+    const hostData = [];
+    for (const [host, groupSessions] of hostGroups.entries()) {
+      groupSessions.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+      const mostRecent = new Date(groupSessions[0].startedAt).getTime();
+      hostData.push({ host, sessions: groupSessions, mostRecent });
+    }
+
+    // Sort host groups by most recent request
+    hostData.sort((a, b) => b.mostRecent - a.mostRecent);
+
+    // Render grouped sessions
+    const html = [];
+    for (const { host, sessions: groupSessions } of hostData) {
+      const isCollapsed = state.collapsedHosts.has(host);
+      const count = groupSessions.length;
+
+      // Host header
+      html.push(
+        '<button class="host-group-header" data-host="' + escapeHtml(host) + '" aria-expanded="' + (!isCollapsed) + '">' +
+          '<span class="host-group-toggle">' + (isCollapsed ? '▸' : '▾') + '</span>' +
+          '<span class="host-group-name">' + escapeHtml(host) + '</span>' +
+          '<span class="host-group-count">' + count + '</span>' +
+        '</button>'
+      );
+
+      // Session rows (only if not collapsed)
+      if (!isCollapsed) {
+        for (const session of groupSessions) {
+          const total = Number(session.requestBodyBytes || 0) + Number(session.responseBodyBytes || 0);
+          html.push(
+            '<button class="session-row session-grid ' + (state.selected?.id === session.id ? 'selected' : '') + '" data-session="' + escapeHtml(session.id) + '" role="listitem">' +
+              '<span class="method">' + escapeHtml(session.method) + '</span>' +
+              '<span class="status-code ' + statusClass(session) + '">' + escapeHtml(session.error ? 'ERR' : (session.statusCode ?? '…')) + '</span>' +
+              '<span class="host-path"><strong>' + (session.mapped ? '<span class="mapped-badge">MAPPED</span>' : '') + '</strong><span>' + escapeHtml(session.path) + '</span></span>' +
+              '<span class="cell-muted">' + escapeHtml(formatDuration(session.durationMs)) + '</span>' +
+              '<span class="cell-muted">' + escapeHtml(formatBytes(total)) + '</span>' +
+            '</button>'
+          );
+        }
+      }
+    }
+
+    list.innerHTML = html.join('');
+
+    // Bind event listeners
     list.querySelectorAll('[data-session]').forEach((row) => {
       row.addEventListener('click', () => selectSession(row.dataset.session));
     });
+    list.querySelectorAll('[data-host]').forEach((header) => {
+      header.addEventListener('click', () => toggleHostGroup(header.dataset.host));
+    });
+  }
+
+  function toggleHostGroup(host) {
+    if (state.collapsedHosts.has(host)) {
+      state.collapsedHosts.delete(host);
+    } else {
+      state.collapsedHosts.add(host);
+    }
+    renderSessions();
   }
 
   function headersText(headers) {
