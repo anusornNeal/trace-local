@@ -155,6 +155,7 @@ export class InterceptProxy {
       await server
         .forAnyRequest()
         .matching((request) => !isLoopback(request.remoteIpAddress))
+        .always()
         .thenReply(
           403,
           'Trace Local proxy only accepts local clients by default. Start with --allow-remote to accept LAN clients.',
@@ -177,6 +178,7 @@ export class InterceptProxy {
             path: request.path,
           }),
         )
+        .always()
         .thenCallback(async (request) => {
           try {
             const mapped = await readMappedFile(rule.filePath, rule.contentType);
@@ -208,13 +210,14 @@ export class InterceptProxy {
     }
 
     const trustedCAs = this.options.additionalTrustedCaCerts?.map((cert) => ({ cert }));
-    await server.forAnyRequest().thenPassThrough({
+    await server.forAnyRequest().always().thenPassThrough({
       additionalTrustedCAs: trustedCAs,
     });
     if (!this.options.allowRemote) {
       await server
         .forAnyWebSocket()
         .matching((request) => !isLoopback(request.remoteIpAddress))
+        .always()
         .thenRejectConnection(
           403,
           'Forbidden',
@@ -222,7 +225,7 @@ export class InterceptProxy {
           'Trace Local WebSocket proxy only accepts local clients by default.',
         );
     }
-    await server.forAnyWebSocket().thenPassThrough({
+    await server.forAnyWebSocket().always().thenPassThrough({
       additionalTrustedCAs: trustedCAs,
     });
   }

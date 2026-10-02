@@ -47,6 +47,16 @@ npm run e2e:desktop
 
 The production audit is expected to report no high-severity vulnerabilities. The project pins `basic-ftp` 6.2.1 through an npm override because Mockttp's proxy dependency chain otherwise resolves an affected 5.x release.
 
+## Stress and performance
+
+```bash
+npm run stress
+```
+
+The default stress scenario sends 2,000 real proxied HTTP requests with concurrency 32, verifies the configured session cap, imports 150 Map Local rules, exercises mapped traffic, and reports throughput, p50/p95/p99 latency, rule-install time, and process memory deltas. It uses isolated temporary state and a deliberately broad 256 MiB RSS safety budget; it is a regression/stability guard rather than a microbenchmark.
+
+The load can be adjusted with `TRACELOCAL_STRESS_REQUESTS`, `TRACELOCAL_STRESS_CONCURRENCY`, `TRACELOCAL_STRESS_MAX_SESSIONS`, `TRACELOCAL_STRESS_RULES`, and `TRACELOCAL_STRESS_MAPPED_REQUESTS`.
+
 ## Desktop packaging
 
 Create an unpacked app for the current platform:

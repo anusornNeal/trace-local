@@ -24,7 +24,11 @@ async function close(server: http.Server): Promise<void> {
   });
 }
 
-async function proxyRequest(proxyPort: number, url: string): Promise<{
+async function proxyRequest(
+  proxyPort: number,
+  url: string,
+  localAddress?: string,
+): Promise<{
   statusCode: number | undefined;
   headers: http.IncomingHttpHeaders;
   body: string;
@@ -36,6 +40,7 @@ async function proxyRequest(proxyPort: number, url: string): Promise<{
         port: proxyPort,
         method: 'GET',
         path: url,
+        localAddress,
       },
       (response) => {
         const chunks: Buffer[] = [];
@@ -203,6 +208,13 @@ test('daemon exposes Map Local rule CRUD API', async () => {
     assert.equal(mapped.statusCode, 200);
     assert.equal(mapped.body, 'hello');
 
+    const mappedAgain = await proxyRequest(
+      status.proxy.port,
+      'http://unreachable.invalid/local/smoke',
+    );
+    assert.equal(mappedAgain.statusCode, 200);
+    assert.equal(mappedAgain.body, 'hello');
+
     const disableResponse = await fetch(`${base}/api/rules/${created.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -227,6 +239,38 @@ test('daemon exposes Map Local rule CRUD API', async () => {
   }
 });
 
+
+test('daemon remote-access deny remains active for repeated requests', async () => {
+  let upstreamRequests = 0;
+  const upstream = http.createServer((_request, response) => {
+    upstreamRequests += 1;
+    response.end('upstream');
+  });
+  const upstreamPort = await listen(upstream);
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-remote-deny-'));
+  const daemon = new TraceLocalDaemon({
+    controlHost: '127.0.0.1',
+    controlPort: 0,
+    proxyPort: 0,
+    dataDir: path.join(tempDir, 'data'),
+  });
+
+  try {
+    const status = await daemon.start();
+    const target = `http://127.0.0.1:${upstreamPort}/remote-check`;
+
+    const first = await proxyRequest(status.proxy.port, target, '127.0.0.2');
+    const second = await proxyRequest(status.proxy.port, target, '127.0.0.2');
+
+    assert.equal(first.statusCode, 403);
+    assert.equal(second.statusCode, 403);
+    assert.equal(upstreamRequests, 0);
+  } finally {
+    await daemon.stop();
+    await close(upstream);
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
 
 test('daemon persists Map Local rules across restart and supports export/import', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-persist-'));
