@@ -1,0 +1,183 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { SessionStore } from '../core/session-store';
+import type { DaemonStatus } from '../core/types';
+import { HttpCaptureProxy } from '../proxy/http-proxy';
+
+const VERSION = '0.1.0';
+
+export interface TraceLocalDaemonOptions {
+  controlHost?: string;
+  controlPort?: number;
+  proxyHost?: string;
+  proxyPort?: number;
+  maxSessions?: number;
+  maxBodyPreviewBytes?: number;
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function sendJson(response: http.ServerResponse, statusCode: number, value: unknown): void {
+  const body = JSON.stringify(value, null, 2);
+  response.writeHead(statusCode, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+  });
+  response.end(body);
+}
+
+export class TraceLocalDaemon {
+  readonly store: SessionStore;
+  readonly proxy: HttpCaptureProxy;
+
+  private controlServer?: http.Server;
+  private controlPort = 0;
+
+  constructor(private readonly options: TraceLocalDaemonOptions = {}) {
+    this.store = new SessionStore(options.maxSessions ?? 500);
+    this.proxy = new HttpCaptureProxy(this.store, {
+      host: options.proxyHost,
+      port: options.proxyPort,
+      maxBodyPreviewBytes: options.maxBodyPreviewBytes,
+    });
+  }
+
+  get status(): DaemonStatus {
+    return {
+      version: VERSION,
+      controlPort: this.controlPort,
+      proxy: this.proxy.status,
+      sessions: this.store.size,
+      rules: 0,
+    };
+  }
+
+  async start(): Promise<DaemonStatus> {
+    if (this.controlServer) {
+      return this.status;
+    }
+
+    await this.proxy.start();
+
+    const controlHost = this.options.controlHost ?? '127.0.0.1';
+    const controlPort = this.options.controlPort ?? 4040;
+    this.controlServer = http.createServer((request, response) => {
+      this.handleControlRequest(request, response);
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const server = this.controlServer!;
+        const onError = (error: Error) => {
+          server.off('listening', onListening);
+          reject(error);
+        };
+        const onListening = () => {
+          server.off('error', onError);
+          resolve();
+        };
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(controlPort, controlHost);
+      });
+    } catch (error) {
+      this.controlServer = undefined;
+      await this.proxy.stop();
+      throw error;
+    }
+
+    const address = this.controlServer.address() as AddressInfo;
+    this.controlPort = address.port;
+    return this.status;
+  }
+
+  async stop(): Promise<void> {
+    const controlServer = this.controlServer;
+    this.controlServer = undefined;
+
+    if (controlServer) {
+      await new Promise<void>((resolve, reject) => {
+        controlServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+
+    await this.proxy.stop();
+    this.controlPort = 0;
+  }
+
+  private handleControlRequest(request: http.IncomingMessage, response: http.ServerResponse): void {
+    const method = request.method ?? 'GET';
+    const url = new URL(request.url ?? '/', 'http://localhost');
+
+    if (method === 'GET' && (url.pathname === '/health' || url.pathname === '/api/status')) {
+      sendJson(response, 200, this.status);
+      return;
+    }
+
+    if (url.pathname === '/api/sessions' && method === 'GET') {
+      const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
+      const limit = Number.isFinite(rawLimit) ? Math.max(0, rawLimit) : 100;
+      sendJson(response, 200, {
+        sessions: this.store.list(limit),
+        total: this.store.size,
+      });
+      return;
+    }
+
+    if (url.pathname === '/api/sessions' && method === 'DELETE') {
+      const removed = this.store.clear();
+      sendJson(response, 200, { removed });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname.startsWith('/api/sessions/')) {
+      const id = decodeURIComponent(url.pathname.slice('/api/sessions/'.length));
+      const session = this.store.get(id);
+      if (!session) {
+        sendJson(response, 404, { error: 'session_not_found', id });
+        return;
+      }
+      sendJson(response, 200, session);
+      return;
+    }
+
+    sendJson(response, 404, { error: 'not_found' });
+  }
+}
+
+async function runStandalone(): Promise<void> {
+  const daemon = new TraceLocalDaemon({
+    controlHost: process.env.TRACELOCAL_CONTROL_HOST,
+    controlPort: parsePositiveInt(process.env.TRACELOCAL_CONTROL_PORT, 4040),
+    proxyHost: process.env.TRACELOCAL_PROXY_HOST,
+    proxyPort: parsePositiveInt(process.env.TRACELOCAL_PROXY_PORT, 8888),
+    maxSessions: parsePositiveInt(process.env.TRACELOCAL_MAX_SESSIONS, 500),
+    maxBodyPreviewBytes: parsePositiveInt(process.env.TRACELOCAL_BODY_PREVIEW_BYTES, 64 * 1024),
+  });
+
+  const status = await daemon.start();
+  process.stdout.write(
+    `Trace Local daemon running\nControl: http://127.0.0.1:${status.controlPort}\nProxy: ${status.proxy.proxyUrl}\n`,
+  );
+
+  const shutdown = async () => {
+    await daemon.stop();
+    process.exit(0);
+  };
+
+  process.once('SIGINT', () => void shutdown());
+  process.once('SIGTERM', () => void shutdown());
+}
+
+if (require.main === module) {
+  void runStandalone().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
