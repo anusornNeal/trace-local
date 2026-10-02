@@ -1,5 +1,6 @@
 node_modules/
 dist/
+release/
 .tracelocal/
 *.log
 .DS_Store

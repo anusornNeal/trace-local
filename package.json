@@ -14,9 +14,20 @@
     "dev:daemon": "tsx src/daemon/server.ts",
     "dev:cli": "tsx src/cli.ts",
     "desktop": "npm run build && electron .",
-    "start": "tsx src/daemon/server.ts"
+    "start": "tsx src/daemon/server.ts",
+    "package:dir": "npm run build && electron-builder --dir",
+    "package:win": "npm run build && electron-builder --win nsis",
+    "package:mac": "npm run build && electron-builder --mac dmg zip",
+    "package:smoke": "node scripts/package-smoke.mjs"
   },
-  "keywords": ["proxy", "http", "https", "mitm", "map-local", "developer-tools"],
+  "keywords": [
+    "proxy",
+    "http",
+    "https",
+    "mitm",
+    "map-local",
+    "developer-tools"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
@@ -26,6 +37,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }

@@ -1,0 +1,34 @@
+appId: com.tracelocal.desktop
+productName: Trace Local
+copyright: Copyright © 2026 Trace Local
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+
+asar: true
+npmRebuild: false
+
+win:
+  target:
+    - nsis
+  artifactName: "${productName}-${version}-${arch}-setup.${ext}"
+  signExecutable: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+mac:
+  target:
+    - dmg
+    - zip
+  identity: null
+  category: public.app-category.developer-tools
+  artifactName: "${productName}-${version}-${arch}.${ext}"
