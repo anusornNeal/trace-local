@@ -154,12 +154,31 @@
           </article>
 
           <article class="settings-card">
-            <h2>Certificate Authority</h2>
+            <h2>HTTPS Certificate Authority</h2>
             <div class="setting-row stacked"><span>Certificate path</span><code id="caPath">—</code><button class="copy-button" data-copy="caPath">Copy</button></div>
             <div class="setting-row stacked"><span>SHA-256 fingerprint</span><code id="caFingerprint">—</code><button class="copy-button" data-copy="caFingerprint">Copy</button></div>
             <div class="setting-row"><span>Expires</span><strong id="caExpiry">—</strong></div>
             <div class="notice">
               Trace Local never installs trust certificates automatically. Import this CA manually into the development device or app you control, then point its HTTP/HTTPS proxy to the address above.
+            </div>
+          </article>
+
+          <article class="settings-card">
+            <h2>Mobile Device Setup</h2>
+            <div class="setting-row"><span>Proxy LAN address</span><code id="mobileProxyAddress">—</code></div>
+            <div class="setting-row"><span>Connected devices</span><strong id="connectedDevices">0 active</strong></div>
+            <div id="mobileQrSection" hidden>
+              <div class="qr-container">
+                <canvas id="qrCanvas" width="200" height="200"></canvas>
+                <div class="qr-info">
+                  <p class="qr-expires">Expires in <strong id="qrExpiry">—</strong></p>
+                  <button id="copyMobileLink" class="button ghost compact">Copy link</button>
+                </div>
+              </div>
+            </div>
+            <button id="generateQr" class="button primary">Generate QR Code</button>
+            <div class="notice mobile-notice">
+              Scan the QR code from a device on the same WiFi network to download the CA certificate. The link expires after 15 minutes. Configure the device's proxy to the address shown above, then install the certificate to trust HTTPS traffic.
             </div>
           </article>
 

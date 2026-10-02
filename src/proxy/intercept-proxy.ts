@@ -66,6 +66,7 @@ export class InterceptProxy {
   private readonly captures = new Map<string, CaptureState>();
   private readonly endpointToMapRule = new Map<string, string>();
   private readonly mapErrors = new Map<string, string>();
+  private readonly activeClients = new Map<string, number>();
   private refreshChain: Promise<void> = Promise.resolve();
 
   constructor(
@@ -82,6 +83,14 @@ export class InterceptProxy {
 
   get status(): ProxyStatus {
     return { ...this.currentStatus };
+  }
+
+  getActiveClientCount(now = Date.now()): number {
+    const staleBefore = now - 5 * 60 * 1000;
+    for (const [ip, lastSeenAt] of this.activeClients) {
+      if (lastSeenAt < staleBefore) this.activeClients.delete(ip);
+    }
+    return this.activeClients.size;
   }
 
   async start(): Promise<ProxyStatus> {
@@ -232,6 +241,9 @@ export class InterceptProxy {
 
   private async subscribeCaptureEvents(server: Mockttp): Promise<void> {
     await server.on('request-initiated', (request) => {
+      if (request.remoteIpAddress && !isLoopback(request.remoteIpAddress)) {
+        this.activeClients.set(request.remoteIpAddress, Date.now());
+      }
       this.captures.set(request.id, {
         request,
         requestBody: new BodyPreviewCollector(this.options.maxBodyPreviewBytes),

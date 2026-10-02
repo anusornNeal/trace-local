@@ -7,6 +7,7 @@ import {
   defaultTraceLocalDataDir,
   type CertificateAuthorityMetadata,
 } from '../certificates/ca-manager';
+import { CaTokenServer } from '../certificates/ca-token-server';
 import { SessionStore } from '../core/session-store';
 import type {
   CreateMapRuleInput,
@@ -20,6 +21,7 @@ import {
   parseRuleStateDocument,
   RuleStateRepository,
 } from '../state/rule-state';
+import { getPrimaryLanAddress, getLanAddresses } from './lan-addresses';
 
 const VERSION = '0.1.0';
 const MAX_CONTROL_BODY_BYTES = 1024 * 1024;
@@ -139,11 +141,14 @@ export class TraceLocalDaemon {
   readonly rules: MapRuleStore;
   readonly caManager: CertificateAuthorityManager;
   readonly ruleState: RuleStateRepository;
+  readonly caTokenServer: CaTokenServer;
   readonly dataDir: string;
   proxy?: InterceptProxy;
 
   private controlServer?: http.Server;
+  private mobileCaServer?: http.Server;
   private controlPort = 0;
+  private mobileCaPort = 0;
   private caMetadata?: CertificateAuthorityMetadata;
   private startupWarnings: string[] = [];
   private readonly eventClients = new Set<http.ServerResponse>();
@@ -154,6 +159,7 @@ export class TraceLocalDaemon {
     this.rules = new MapRuleStore();
     this.caManager = new CertificateAuthorityManager(this.dataDir);
     this.ruleState = new RuleStateRepository(this.dataDir);
+    this.caTokenServer = new CaTokenServer();
     this.store.subscribe((event) => this.broadcastEvent(event.type, event));
   }
 
@@ -241,13 +247,16 @@ export class TraceLocalDaemon {
 
     const address = this.controlServer.address() as AddressInfo;
     this.controlPort = address.port;
+    await this.startMobileCaServer();
     return this.status;
   }
 
   async stop(): Promise<void> {
     const controlServer = this.controlServer;
+    const mobileCaServer = this.mobileCaServer;
     const proxy = this.proxy;
     this.controlServer = undefined;
+    this.mobileCaServer = undefined;
     this.proxy = undefined;
 
     for (const client of this.eventClients) {
@@ -261,8 +270,13 @@ export class TraceLocalDaemon {
       });
     }
 
+    if (mobileCaServer) {
+      await new Promise<void>((resolve) => mobileCaServer.close(() => resolve()));
+    }
+
     if (proxy) await proxy.stop();
     this.controlPort = 0;
+    this.mobileCaPort = 0;
   }
 
   private async refreshProxyRules(): Promise<void> {
@@ -335,6 +349,59 @@ export class TraceLocalDaemon {
     response.once('close', cleanup);
   }
 
+  private async startMobileCaServer(): Promise<void> {
+    const lanAddress = getPrimaryLanAddress();
+    if (!lanAddress) {
+      this.startupWarnings.push('Mobile CA setup is unavailable because no LAN address was found.');
+      return;
+    }
+
+    const server = http.createServer((request, response) => {
+      void this.handleMobileCaRequest(request, response).catch((error) => {
+        if (!response.headersSent) {
+          sendJson(response, 500, { error: 'mobile_ca_error', message: error instanceof Error ? error.message : String(error) });
+        } else if (!response.writableEnded) {
+          response.end();
+        }
+      });
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '0.0.0.0', () => resolve());
+      });
+      this.mobileCaServer = server;
+      this.mobileCaPort = (server.address() as AddressInfo).port;
+    } catch (error) {
+      this.mobileCaPort = 0;
+      this.startupWarnings.push(`Mobile CA setup could not bind to the LAN: ${error instanceof Error ? error.message : String(error)}`);
+      await new Promise<void>((resolve) => server.close(() => resolve())).catch(() => undefined);
+    }
+  }
+
+  private async handleMobileCaRequest(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+    const method = request.method ?? 'GET';
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    if (method !== 'GET' || !url.pathname.startsWith('/ca/')) {
+      sendText(response, 404, 'text/plain; charset=utf-8', 'Not found');
+      return;
+    }
+    const token = url.pathname.slice('/ca/'.length);
+    if (!this.caTokenServer.validateToken(token)) {
+      sendText(response, 404, 'text/plain; charset=utf-8', 'Invalid or expired token');
+      return;
+    }
+    const material = await this.caManager.ensure();
+    response.writeHead(200, {
+      'content-type': 'application/x-pem-file; charset=utf-8',
+      'content-length': Buffer.byteLength(material.cert),
+      'content-disposition': 'attachment; filename=\"tracelocal.crt\"',
+      'cache-control': 'no-store',
+    });
+    response.end(material.cert);
+  }
+
   private async handleControlRequest(
     request: http.IncomingMessage,
     response: http.ServerResponse,
@@ -373,6 +440,69 @@ export class TraceLocalDaemon {
     if (method === 'GET' && url.pathname === '/api/ca/cert') {
       const material = await this.caManager.ensure();
       sendText(response, 200, 'application/x-pem-file; charset=utf-8', material.cert);
+      return;
+    }
+
+    if (method === 'POST' && url.pathname === '/api/ca/mobile-token') {
+      const lanAddress = getPrimaryLanAddress();
+      if (!lanAddress || this.mobileCaPort === 0) {
+        sendJson(response, 503, { error: 'mobile_ca_unavailable', message: 'No LAN-reachable CA setup endpoint is available.' });
+        return;
+      }
+      const token = this.caTokenServer.createToken();
+      const lanAddresses = getLanAddresses();
+      const proxyHost = lanAddress;
+      const proxyPort = this.proxy?.status.port || 0;
+      const baseUrl = `http://${proxyHost}:${this.mobileCaPort}`;
+      const tokenUrl = `${baseUrl}/ca/${token.token}`;
+
+      sendJson(response, 201, {
+        token: token.token,
+        url: tokenUrl,
+        expiresAt: token.expiresAt,
+        ttlSeconds: Math.floor((token.expiresAt - Date.now()) / 1000),
+        lanAddresses: lanAddresses.map((addr) => ({
+          address: addr.address,
+          family: addr.family,
+          interface: addr.interface,
+        })),
+        proxyAddress: `${proxyHost}:${proxyPort}`,
+      });
+      return;
+    }
+
+    if (method === 'GET' && url.pathname.startsWith('/ca/')) {
+      const token = url.pathname.slice('/ca/'.length);
+      if (!this.caTokenServer.validateToken(token)) {
+        sendText(response, 404, 'text/plain; charset=utf-8', 'Invalid or expired token');
+        return;
+      }
+
+      const clientIp = request.socket.remoteAddress || 'unknown';
+      this.caTokenServer.trackClient(clientIp);
+
+      const material = await this.caManager.ensure();
+      response.writeHead(200, {
+        'content-type': 'application/x-pem-file; charset=utf-8',
+        'content-length': Buffer.byteLength(material.cert),
+        'content-disposition': 'attachment; filename="tracelocal.crt"',
+        'cache-control': 'no-store',
+      });
+      response.end(material.cert);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/api/ca/mobile-status') {
+      const lanAddress = getPrimaryLanAddress();
+      const proxyPort = this.proxy?.status.port || 0;
+      sendJson(response, 200, {
+        activeClients: this.proxy?.getActiveClientCount() ?? 0,
+        proxyAddress: lanAddress ? `${lanAddress}:${proxyPort}` : null,
+        lanAddresses: getLanAddresses().map((addr) => ({
+          address: addr.address,
+          family: addr.family,
+        })),
+      });
       return;
     }
 
