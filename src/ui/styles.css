@@ -201,3 +201,15 @@ pre {
   .traffic-layout { grid-template-columns: 1fr; }
   .detail-pane { position: absolute; inset: 103px 0 0 42%; z-index: 3; border-left: 1px solid var(--line); box-shadow: -10px 0 30px rgba(0,0,0,.25); }
 }
+
+.context-menu {
+  position: fixed; z-index: 50; min-width: 150px; padding: 5px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2);
+  box-shadow: 0 12px 32px rgba(0,0,0,.38);
+}
+.context-menu[hidden] { display: none; }
+.context-menu button {
+  width: 100%; border: 0; border-radius: 5px; padding: 8px 10px;
+  background: transparent; color: var(--text); text-align: left; cursor: pointer;
+}
+.context-menu button:hover, .context-menu button:focus { background: var(--accent-bg); outline: none; }

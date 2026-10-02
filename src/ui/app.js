@@ -14,6 +14,7 @@
     mobileToken: null,
     qrExpiryTimer: null,
     collapsedHosts: new Set(),
+    contextSessionId: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -174,6 +175,47 @@
     list.querySelectorAll('[data-host]').forEach((header) => {
       header.addEventListener('click', () => toggleHostGroup(header.dataset.host));
     });
+  }
+
+  function closeTrafficContextMenu() {
+    const menu = $('#trafficContextMenu');
+    menu.hidden = true;
+    state.contextSessionId = null;
+  }
+
+  function openTrafficContextMenu(sessionId, x, y) {
+    const session = state.sessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    state.contextSessionId = sessionId;
+    const menu = $('#trafficContextMenu');
+    menu.hidden = false;
+    const margin = 8;
+    const width = menu.offsetWidth || 150;
+    const height = menu.offsetHeight || 40;
+    menu.style.left = Math.max(margin, Math.min(x, window.innerWidth - width - margin)) + 'px';
+    menu.style.top = Math.max(margin, Math.min(y, window.innerHeight - height - margin)) + 'px';
+    $('#contextMapLocal').focus();
+  }
+
+  function openMapLocalFromContext() {
+    const session = state.sessions.find((item) => item.id === state.contextSessionId);
+    if (!session) {
+      closeTrafficContextMenu();
+      return;
+    }
+
+    const mapTab = $('.tab[data-tab="map"]');
+    mapTab?.click();
+    const form = $('#ruleForm');
+    form.reset();
+    $('#ruleTarget').value = 'url';
+    $('#rulePattern').value = session.url;
+    $('#ruleMethod').value = session.method || '*';
+    $('#ruleStatus').value = '200';
+    $('#ruleFile').value = '';
+    form.hidden = false;
+    closeTrafficContextMenu();
+    $('#rulePattern').focus();
   }
 
   function toggleHostGroup(host) {
