@@ -1,0 +1,32 @@
+{
+  "name": "tracelocal",
+  "version": "0.1.0",
+  "description": "Cross-platform HTTP/HTTPS traffic inspector and Map Local proxy with GUI and CLI.",
+  "main": "dist/desktop.js",
+  "bin": {
+    "tracelocal": "dist/cli.js"
+  },
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-ui.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx tests/*.test.ts",
+    "dev:daemon": "tsx src/daemon/server.ts",
+    "dev:cli": "tsx src/cli.ts",
+    "desktop": "npm run build && electron .",
+    "start": "tsx src/daemon/server.ts"
+  },
+  "keywords": ["proxy", "http", "https", "mitm", "map-local", "developer-tools"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^15.0.0",
+    "mockttp": "^4.6.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "^44.5.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
