@@ -81,7 +81,9 @@ export interface ProxyStatus {
   running: boolean;
   port: number;
   proxyUrl: string | null;
+  lanUrl: string | null;
   caCertPath: string;
+  error?: string;
 }
 
 export interface DaemonStatus {

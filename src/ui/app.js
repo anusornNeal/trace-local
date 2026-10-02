@@ -69,10 +69,11 @@
   function renderStatus() {
     const s = state.status;
     if (!s) return;
-    const proxy = s.proxy?.proxyUrl || 'Proxy unavailable';
-    $('#proxySummary').textContent = proxy;
+    const proxy = s.proxy?.lanUrl || s.proxy?.proxyUrl || 'Proxy unavailable';
+    const proxyStatus = s.proxy?.running ? 'Proxy Ready' : (s.proxy?.error || 'Proxy Stopped');
+    $('#proxySummary').textContent = `${proxy} · ${proxyStatus}`;
     $('#proxyUrl').textContent = proxy;
-    $('#proxyStatus').textContent = s.proxy?.running ? 'Running' : 'Stopped';
+    $('#proxyStatus').textContent = proxyStatus;
     $('#sessionCount').textContent = s.sessions + (s.sessions === 1 ? ' request' : ' requests');
     $('#runtimeVersion').textContent = s.version || '—';
     $('#controlUrl').textContent = location.origin;

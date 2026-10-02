@@ -15,6 +15,7 @@ import type { CertificateAuthorityMaterial } from '../certificates/ca-manager';
 import { readMappedFile } from '../map-local/file-response';
 import { matchesMapRule } from '../map-local/matcher';
 import { MapRuleStore } from '../map-local/rule-store';
+import { getLanIpAddress } from '../core/network';
 
 interface CaptureState {
   request: InitiatedRequest;
@@ -77,6 +78,7 @@ export class InterceptProxy {
       running: false,
       port: 0,
       proxyUrl: null,
+      lanUrl: null,
       caCertPath: options.ca.certPath,
     };
   }
@@ -98,30 +100,46 @@ export class InterceptProxy {
       return this.status;
     }
 
-    const { getLocal } = await import('mockttp');
-    const server = getLocal({
-      https: {
-        key: this.options.ca.key,
-        cert: this.options.ca.cert,
-      },
-      http2: 'fallback',
-      recordTraffic: false,
-      maxBodySize: this.options.maxBodyPreviewBytes ?? 64 * 1024,
-      suggestChanges: false,
-    });
+    try {
+      const { getLocal } = await import('mockttp');
+      const server = getLocal({
+        https: {
+          key: this.options.ca.key,
+          cert: this.options.ca.cert,
+        },
+        http2: 'fallback',
+        recordTraffic: false,
+        maxBodySize: this.options.maxBodyPreviewBytes ?? 64 * 1024,
+        suggestChanges: false,
+      });
 
-    await server.start(this.options.port ?? 8888);
-    this.server = server;
-    await this.applyRulesAndSubscriptions();
+      await server.start(this.options.port ?? 8888);
+      this.server = server;
+      await this.applyRulesAndSubscriptions();
 
-    this.currentStatus = {
-      running: true,
-      port: server.port,
-      proxyUrl: `http://127.0.0.1:${server.port}`,
-      caCertPath: this.options.ca.certPath,
-    };
+      const lanIp = getLanIpAddress();
+      const lanUrl = lanIp ? `http://${lanIp}:${server.port}` : null;
 
-    return this.status;
+      this.currentStatus = {
+        running: true,
+        port: server.port,
+        proxyUrl: `http://127.0.0.1:${server.port}`,
+        lanUrl,
+        caCertPath: this.options.ca.certPath,
+      };
+
+      return this.status;
+    } catch (error) {
+      this.currentStatus = {
+        running: false,
+        port: 0,
+        proxyUrl: null,
+        lanUrl: null,
+        caCertPath: this.options.ca.certPath,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
@@ -137,6 +155,7 @@ export class InterceptProxy {
       ...this.currentStatus,
       running: false,
       proxyUrl: null,
+      lanUrl: null,
     };
   }
 

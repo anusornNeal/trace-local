@@ -6,6 +6,7 @@ import { SessionStore } from '../core/session-store';
 import type { ProxyStatus, SessionRecord } from '../core/types';
 import { readMappedFile } from '../map-local/file-response';
 import { MapRuleStore } from '../map-local/rule-store';
+import { getLanIpAddress } from '../core/network';
 
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -82,6 +83,7 @@ export class HttpCaptureProxy {
     running: false,
     port: 0,
     proxyUrl: null,
+    lanUrl: null,
     caCertPath: '',
   };
 
@@ -126,10 +128,14 @@ export class HttpCaptureProxy {
     });
 
     const address = this.server.address() as AddressInfo;
+    const lanIp = getLanIpAddress();
+    const lanUrl = lanIp ? `http://${lanIp}:${address.port}` : null;
+
     this.currentStatus = {
       running: true,
       port: address.port,
       proxyUrl: `http://${host}:${address.port}`,
+      lanUrl,
       caCertPath: '',
     };
 
@@ -151,6 +157,7 @@ export class HttpCaptureProxy {
       ...this.currentStatus,
       running: false,
       proxyUrl: null,
+      lanUrl: null,
     };
   }
 

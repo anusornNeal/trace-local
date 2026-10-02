@@ -171,6 +171,7 @@ export class TraceLocalDaemon {
         running: false,
         port: 0,
         proxyUrl: null,
+        lanUrl: null,
         caCertPath: this.caManager.certPath,
       },
       sessions: this.store.size,

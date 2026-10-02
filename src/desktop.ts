@@ -54,6 +54,7 @@ async function startDesktopDaemon(proxyPort: number): Promise<TraceLocalDaemon> 
     controlPort: portFromEnv('TRACELOCAL_CONTROL_PORT') ?? 0,
     proxyPort,
     dataDir: dataDir ? path.resolve(dataDir) : undefined,
+    allowRemote: true,
   });
   await candidate.start();
   return candidate;
@@ -67,9 +68,10 @@ async function createMainWindow(): Promise<void> {
     try {
       daemon = await startDesktopDaemon(preferredProxyPort);
     } catch (error) {
-      if (configuredProxyPort !== undefined || !isAddressInUse(error)) throw error;
-      console.warn('Proxy port 8888 is already in use; falling back to a free port.');
-      daemon = await startDesktopDaemon(0);
+      if (isAddressInUse(error)) {
+        throw new Error(`Proxy port ${preferredProxyPort} is already in use. Close the conflicting app or set TRACELOCAL_PROXY_PORT to another stable port.`);
+      }
+      throw error;
     }
   }
 
