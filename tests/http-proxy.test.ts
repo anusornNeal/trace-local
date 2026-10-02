@@ -28,6 +28,7 @@ test('HTTP proxy forwards and captures request/response traffic', async () => {
       response.writeHead(201, {
         'content-type': 'text/plain; charset=utf-8',
         'x-upstream': 'yes',
+        'x-saw-remove': request.headers['x-remove'] ? 'yes' : 'no',
       });
       response.end(`pong:${body}`);
     });
@@ -53,6 +54,8 @@ test('HTTP proxy forwards and captures request/response traffic', async () => {
           path: `http://127.0.0.1:${upstreamPort}/hello?x=1`,
           headers: {
             'content-type': 'text/plain',
+            connection: 'x-remove',
+            'x-remove': 'secret',
           },
         },
         (response) => {
@@ -82,7 +85,54 @@ test('HTTP proxy forwards and captures request/response traffic', async () => {
     assert.equal(capture?.responseBody, 'pong:ping');
     assert.equal(capture?.responseBodyBytes, 9);
     assert.equal(capture?.responseHeaders?.['x-upstream'], 'yes');
+    assert.equal(capture?.responseHeaders?.['x-saw-remove'], 'no');
     assert.equal(capture?.mapped, false);
+  } finally {
+    await proxy.stop();
+    await close(upstream);
+  }
+});
+
+
+test('HTTP proxy times out stalled upstream requests and records the error', async () => {
+  const upstream = http.createServer((_request, _response) => {
+    // Intentionally never respond.
+  });
+
+  const upstreamPort = await listen(upstream);
+  const store = new SessionStore(10);
+  const proxy = new HttpCaptureProxy(store, {
+    host: '127.0.0.1',
+    port: 0,
+    upstreamTimeoutMs: 50,
+  });
+
+  try {
+    const proxyStatus = await proxy.start();
+
+    const statusCode = await new Promise<number | undefined>((resolve, reject) => {
+      const request = http.request(
+        {
+          host: '127.0.0.1',
+          port: proxyStatus.port,
+          method: 'GET',
+          path: `http://127.0.0.1:${upstreamPort}/stall`,
+        },
+        (response) => {
+          response.resume();
+          response.on('end', () => resolve(response.statusCode));
+        },
+      );
+      request.on('error', reject);
+      request.end();
+    });
+
+    assert.equal(statusCode, 502);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const capture = store.get(store.list(1)[0]!.id);
+    assert.match(capture?.error ?? '', /timed out/i);
+    assert.equal(capture?.path, '/stall');
   } finally {
     await proxy.stop();
     await close(upstream);

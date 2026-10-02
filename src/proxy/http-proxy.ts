@@ -17,13 +17,28 @@ const HOP_BY_HOP_HEADERS = new Set([
   'upgrade',
 ]);
 
+function connectionScopedHeaders(headers: http.IncomingHttpHeaders): Set<string> {
+  const values = headers.connection;
+  const joined = Array.isArray(values) ? values.join(',') : values ?? '';
+  return new Set(
+    joined
+      .split(',')
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 function sanitizeHeaders(headers: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  const dynamicHopByHop = connectionScopedHeaders(headers);
   const result: http.OutgoingHttpHeaders = {};
+
   for (const [name, value] of Object.entries(headers)) {
-    if (!HOP_BY_HOP_HEADERS.has(name.toLowerCase())) {
+    const normalized = name.toLowerCase();
+    if (!HOP_BY_HOP_HEADERS.has(normalized) && !dynamicHopByHop.has(normalized)) {
       result[name] = value;
     }
   }
+
   return result;
 }
 
@@ -49,6 +64,7 @@ export interface HttpCaptureProxyOptions {
   host?: string;
   port?: number;
   maxBodyPreviewBytes?: number;
+  upstreamTimeoutMs?: number;
 }
 
 export class HttpCaptureProxy {
@@ -226,6 +242,18 @@ export class HttpCaptureProxy {
 
         upstreamResponse.on('data', (chunk: Buffer) => responseBody.append(chunk));
         upstreamResponse.on('end', () => finalize(upstreamResponse));
+        upstreamResponse.on('aborted', () => {
+          const error = new Error('Upstream response aborted');
+          finalize(upstreamResponse, error);
+          clientResponse.destroy(error);
+        });
+        upstreamResponse.on('close', () => {
+          if (!upstreamResponse.complete) {
+            const error = new Error('Upstream response closed before completion');
+            finalize(upstreamResponse, error);
+            clientResponse.destroy(error);
+          }
+        });
         upstreamResponse.on('error', (error) => {
           finalize(upstreamResponse, error);
           clientResponse.destroy(error);
@@ -234,18 +262,42 @@ export class HttpCaptureProxy {
       },
     );
 
+    const upstreamTimeoutMs = this.options.upstreamTimeoutMs ?? 30_000;
+    if (upstreamTimeoutMs > 0) {
+      upstreamRequest.setTimeout(upstreamTimeoutMs, () => {
+        upstreamRequest.destroy(
+          new Error(`Upstream request timed out after ${upstreamTimeoutMs}ms`),
+        );
+      });
+    }
+
     upstreamRequest.on('error', (error) => {
       finalize(undefined, error);
       if (!clientResponse.headersSent) {
         clientResponse.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
       }
-      clientResponse.end('Upstream request failed');
+      if (!clientResponse.writableEnded) {
+        clientResponse.end('Upstream request failed');
+      }
     });
 
     request.on('aborted', () => {
       const error = new Error('Client request aborted');
       upstreamRequest.destroy(error);
       finalize(undefined, error);
+    });
+
+    request.on('error', (error) => {
+      upstreamRequest.destroy(error);
+      finalize(undefined, error);
+    });
+
+    clientResponse.on('close', () => {
+      if (!clientResponse.writableEnded && !completed) {
+        const error = new Error('Client response closed before completion');
+        upstreamRequest.destroy(error);
+        finalize(undefined, error);
+      }
     });
 
     request.pipe(upstreamRequest);
