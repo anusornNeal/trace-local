@@ -145,6 +145,7 @@ export class TraceLocalDaemon {
   private controlServer?: http.Server;
   private controlPort = 0;
   private caMetadata?: CertificateAuthorityMetadata;
+  private startupWarnings: string[] = [];
   private readonly eventClients = new Set<http.ServerResponse>();
 
   constructor(private readonly options: TraceLocalDaemonOptions = {}) {
@@ -168,13 +169,20 @@ export class TraceLocalDaemon {
       },
       sessions: this.store.size,
       rules: this.rules.size,
+      warnings: [...this.startupWarnings],
     };
   }
 
   async start(): Promise<DaemonStatus> {
     if (this.controlServer && this.proxy) return this.status;
 
-    this.rules.hydrate(await this.ruleState.load());
+    this.startupWarnings = [];
+    const persistedRules = await this.ruleState.loadRecovering();
+    this.rules.hydrate(persistedRules.rules);
+    if (persistedRules.warning) {
+      this.startupWarnings.push(persistedRules.warning);
+      console.warn(persistedRules.warning);
+    }
 
     const ca = await this.caManager.ensure();
     this.caMetadata = {

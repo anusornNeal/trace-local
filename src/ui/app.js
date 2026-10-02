@@ -9,6 +9,7 @@
     rules: [],
     sse: null,
     connected: false,
+    shownWarnings: new Set(),
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -34,12 +35,12 @@
     return response.json();
   }
 
-  function toast(message) {
+  function toast(message, duration = 1800) {
     const element = $('#toast');
     element.textContent = message;
     element.classList.add('show');
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => element.classList.remove('show'), 1800);
+    toast.timer = setTimeout(() => element.classList.remove('show'), duration);
   }
 
   function formatBytes(value) {
@@ -73,6 +74,11 @@
     $('#controlUrl').textContent = location.origin;
     $('#trafficCount').textContent = String(state.sessions.length);
     $('#ruleCount').textContent = String(state.rules.length);
+    for (const warning of s.warnings || []) {
+      if (state.shownWarnings.has(warning)) continue;
+      state.shownWarnings.add(warning);
+      toast(warning, 8000);
+    }
   }
 
   function renderConnection() {

@@ -141,7 +141,14 @@ if (e2eMode) {
 
 app.whenReady().then(() => {
   void createMainWindow().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
     console.error('Failed to start Trace Local desktop:', error);
+    if (!e2eMode) {
+      dialog.showErrorBox(
+        'Trace Local could not start',
+        `${message}\n\nCheck the data directory permissions and whether configured ports are available.`,
+      );
+    }
     app.quit();
   });
 

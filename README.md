@@ -31,6 +31,8 @@ Trace Local does not install trust certificates automatically and binds its cont
 
 Open **Map Local**, create a rule, choose a local response file, then match by full URL, host, or path. Rules are persisted locally and can be enabled, disabled, or removed without restarting the proxy.
 
+If persisted Map Local state becomes invalid or belongs to an unsupported format, Trace Local moves the original `rules.json` aside as a timestamped `rules.rejected-*.json` backup and starts with an empty rule set. The desktop UI shows a startup warning with the preserved backup path. Filesystem and permission failures are not treated as recoverable corruption.
+
 ## Verification
 
 ```bash

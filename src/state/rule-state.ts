@@ -10,6 +10,22 @@ export interface RuleStateDocument {
   rules: MapRule[];
 }
 
+export interface RuleStateRecoveryResult {
+  rules: MapRule[];
+  warning?: string;
+  backupPath?: string;
+}
+
+class RuleStateContentError extends Error {
+  constructor(
+    readonly statePath: string,
+    message: string,
+  ) {
+    super(`Failed to load Map Local state from ${statePath}: ${message}`);
+    this.name = 'RuleStateContentError';
+  }
+}
+
 const TARGETS = new Set<MapTarget>(['url', 'host', 'path']);
 
 function assertString(value: unknown, field: string): asserts value is string {
@@ -141,9 +157,33 @@ export class RuleStateRepository {
     try {
       return parseRuleStateDocument(JSON.parse(raw)).rules;
     } catch (error) {
-      throw new Error(
-        `Failed to load Map Local state from ${this.filePath}: ${error instanceof Error ? error.message : String(error)}`,
+      throw new RuleStateContentError(
+        this.filePath,
+        error instanceof Error ? error.message : String(error),
       );
+    }
+  }
+
+  async loadRecovering(): Promise<RuleStateRecoveryResult> {
+    try {
+      return { rules: await this.load() };
+    } catch (error) {
+      if (!(error instanceof RuleStateContentError)) throw error;
+
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = path.join(
+        this.stateDir,
+        `rules.rejected-${stamp}.json`,
+      );
+      await rename(this.filePath, backupPath);
+
+      return {
+        rules: [],
+        backupPath,
+        warning:
+          `Persisted Map Local rules were invalid and have been disabled. ` +
+          `The original state was preserved at ${backupPath}. ${error.message}`,
+      };
     }
   }
 

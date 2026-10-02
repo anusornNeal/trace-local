@@ -90,4 +90,5 @@ export interface DaemonStatus {
   proxy: ProxyStatus;
   sessions: number;
   rules: number;
+  warnings: string[];
 }
