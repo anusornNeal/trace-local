@@ -2,6 +2,7 @@ export type MapTarget = 'url' | 'host' | 'path';
 
 export interface MapRule {
   id: string;
+  order: number;
   enabled: boolean;
   target: MapTarget;
   pattern: string;
@@ -21,6 +22,16 @@ export interface CreateMapRuleInput {
   filePath: string;
   statusCode?: number;
   contentType?: string;
+}
+
+export interface UpdateMapRuleInput {
+  enabled?: boolean;
+  target?: MapTarget;
+  pattern?: string;
+  method?: string;
+  filePath?: string;
+  statusCode?: number;
+  contentType?: string | null;
 }
 
 export interface SessionRecord {

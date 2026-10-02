@@ -4,6 +4,8 @@ import type { AddressInfo } from 'node:net';
 import { BodyPreviewCollector } from '../core/body-preview';
 import { SessionStore } from '../core/session-store';
 import type { ProxyStatus, SessionRecord } from '../core/types';
+import { readMappedFile } from '../map-local/file-response';
+import { MapRuleStore } from '../map-local/rule-store';
 
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -65,6 +67,13 @@ export interface HttpCaptureProxyOptions {
   port?: number;
   maxBodyPreviewBytes?: number;
   upstreamTimeoutMs?: number;
+  ruleStore?: MapRuleStore;
+}
+
+interface CapturedResponse {
+  statusCode?: number;
+  statusMessage?: string;
+  headers: http.IncomingHttpHeaders;
 }
 
 export class HttpCaptureProxy {
@@ -172,8 +181,9 @@ export class HttpCaptureProxy {
     let completed = false;
 
     const finalize = (
-      response?: http.IncomingMessage,
+      response?: CapturedResponse,
       error?: Error,
+      mapRuleId?: string,
     ) => {
       if (completed) {
         return;
@@ -211,7 +221,8 @@ export class HttpCaptureProxy {
         responseBodyBytes: responsePreview.totalBytes,
         requestBodyEncoding: requestPreview.encoding,
         responseBodyEncoding: responsePreview.encoding,
-        mapped: false,
+        mapped: Boolean(mapRuleId),
+        mapRuleId,
         error: error?.message,
       };
 
@@ -219,6 +230,74 @@ export class HttpCaptureProxy {
     };
 
     request.on('data', (chunk: Buffer) => requestBody.append(chunk));
+
+    const matchedRule = this.options.ruleStore?.findMatch({
+      method: request.method ?? 'GET',
+      url: target.toString(),
+      host: target.host,
+      path: `${target.pathname}${target.search}`,
+    });
+
+    if (matchedRule) {
+      const finalizeMappedError = (error: Error) => {
+        if (!clientResponse.headersSent) {
+          const diagnostic = Buffer.from(`Map Local failed: ${error.message}\n`);
+          responseBody.append(diagnostic);
+          const headers = {
+            'content-type': 'text/plain; charset=utf-8',
+            'content-length': String(diagnostic.length),
+          };
+          clientResponse.writeHead(500, headers);
+          clientResponse.end(diagnostic);
+          finalize(
+            { statusCode: 500, statusMessage: 'Map Local Error', headers },
+            error,
+            matchedRule.id,
+          );
+        } else {
+          clientResponse.destroy(error);
+          finalize(undefined, error, matchedRule.id);
+        }
+      };
+
+      request.once('end', () => {
+        void (async () => {
+          try {
+            const mapped = await readMappedFile(matchedRule.filePath, matchedRule.contentType);
+            responseBody.append(mapped.body);
+            const headers = {
+              'content-type': mapped.contentType,
+              'content-length': String(mapped.body.length),
+              'x-tracelocal-map-rule': matchedRule.id,
+            };
+
+            clientResponse.writeHead(matchedRule.statusCode, headers);
+            clientResponse.end(mapped.body);
+            finalize(
+              {
+                statusCode: matchedRule.statusCode,
+                statusMessage: 'Mapped',
+                headers,
+              },
+              undefined,
+              matchedRule.id,
+            );
+          } catch (error) {
+            finalizeMappedError(
+              error instanceof Error ? error : new Error(String(error)),
+            );
+          }
+        })();
+      });
+
+      request.once('aborted', () => {
+        finalizeMappedError(new Error('Client request aborted before Map Local response'));
+      });
+      request.once('error', (error) => {
+        finalizeMappedError(error);
+      });
+      return;
+    }
 
     const upstreamRequest = http.request(
       {

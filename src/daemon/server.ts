@@ -1,10 +1,16 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { SessionStore } from '../core/session-store';
-import type { DaemonStatus } from '../core/types';
+import type {
+  CreateMapRuleInput,
+  DaemonStatus,
+  UpdateMapRuleInput,
+} from '../core/types';
+import { MapRuleStore } from '../map-local/rule-store';
 import { HttpCaptureProxy } from '../proxy/http-proxy';
 
 const VERSION = '0.1.0';
+const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 
 export interface TraceLocalDaemonOptions {
   controlHost?: string;
@@ -13,9 +19,10 @@ export interface TraceLocalDaemonOptions {
   proxyPort?: number;
   maxSessions?: number;
   maxBodyPreviewBytes?: number;
+  upstreamTimeoutMs?: number;
 }
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
+function parseNonNegativeInt(value: string | undefined, fallback: number): number {
   if (value === undefined) {
     return fallback;
   }
@@ -32,8 +39,40 @@ function sendJson(response: http.ServerResponse, statusCode: number, value: unkn
   response.end(body);
 }
 
+async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+
+  for await (const rawChunk of request) {
+    const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+    totalBytes += chunk.length;
+    if (totalBytes > MAX_CONTROL_BODY_BYTES) {
+      throw new Error('request body too large');
+    }
+    chunks.push(chunk);
+  }
+
+  if (totalBytes === 0) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    throw new Error('invalid JSON body');
+  }
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('JSON body must be an object');
+  }
+  return value as Record<string, unknown>;
+}
+
 export class TraceLocalDaemon {
   readonly store: SessionStore;
+  readonly rules: MapRuleStore;
   readonly proxy: HttpCaptureProxy;
 
   private controlServer?: http.Server;
@@ -41,10 +80,13 @@ export class TraceLocalDaemon {
 
   constructor(private readonly options: TraceLocalDaemonOptions = {}) {
     this.store = new SessionStore(options.maxSessions ?? 500);
+    this.rules = new MapRuleStore();
     this.proxy = new HttpCaptureProxy(this.store, {
       host: options.proxyHost,
       port: options.proxyPort,
       maxBodyPreviewBytes: options.maxBodyPreviewBytes,
+      upstreamTimeoutMs: options.upstreamTimeoutMs,
+      ruleStore: this.rules,
     });
   }
 
@@ -54,7 +96,7 @@ export class TraceLocalDaemon {
       controlPort: this.controlPort,
       proxy: this.proxy.status,
       sessions: this.store.size,
-      rules: 0,
+      rules: this.rules.size,
     };
   }
 
@@ -68,7 +110,16 @@ export class TraceLocalDaemon {
     const controlHost = this.options.controlHost ?? '127.0.0.1';
     const controlPort = this.options.controlPort ?? 4040;
     this.controlServer = http.createServer((request, response) => {
-      this.handleControlRequest(request, response);
+      void this.handleControlRequest(request, response).catch((error) => {
+        if (!response.headersSent) {
+          sendJson(response, 500, {
+            error: 'internal_error',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        } else if (!response.writableEnded) {
+          response.end();
+        }
+      });
     });
 
     try {
@@ -111,7 +162,10 @@ export class TraceLocalDaemon {
     this.controlPort = 0;
   }
 
-  private handleControlRequest(request: http.IncomingMessage, response: http.ServerResponse): void {
+  private async handleControlRequest(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+  ): Promise<void> {
     const method = request.method ?? 'GET';
     const url = new URL(request.url ?? '/', 'http://localhost');
 
@@ -147,6 +201,56 @@ export class TraceLocalDaemon {
       return;
     }
 
+    if (url.pathname === '/api/rules' && method === 'GET') {
+      sendJson(response, 200, { rules: this.rules.list() });
+      return;
+    }
+
+    if (url.pathname === '/api/rules' && method === 'POST') {
+      try {
+        const input = asObject(await readJsonBody(request)) as unknown as CreateMapRuleInput;
+        const rule = this.rules.create(input);
+        sendJson(response, 201, rule);
+      } catch (error) {
+        sendJson(response, 400, {
+          error: 'invalid_rule',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (url.pathname.startsWith('/api/rules/')) {
+      const id = decodeURIComponent(url.pathname.slice('/api/rules/'.length));
+
+      if (method === 'PATCH') {
+        try {
+          const input = asObject(await readJsonBody(request)) as unknown as UpdateMapRuleInput;
+          const rule = this.rules.update(id, input);
+          if (!rule) {
+            sendJson(response, 404, { error: 'rule_not_found', id });
+            return;
+          }
+          sendJson(response, 200, rule);
+        } catch (error) {
+          sendJson(response, 400, {
+            error: 'invalid_rule',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return;
+      }
+
+      if (method === 'DELETE') {
+        if (!this.rules.delete(id)) {
+          sendJson(response, 404, { error: 'rule_not_found', id });
+          return;
+        }
+        sendJson(response, 200, { deleted: true, id });
+        return;
+      }
+    }
+
     sendJson(response, 404, { error: 'not_found' });
   }
 }
@@ -154,11 +258,18 @@ export class TraceLocalDaemon {
 async function runStandalone(): Promise<void> {
   const daemon = new TraceLocalDaemon({
     controlHost: process.env.TRACELOCAL_CONTROL_HOST,
-    controlPort: parsePositiveInt(process.env.TRACELOCAL_CONTROL_PORT, 4040),
+    controlPort: parseNonNegativeInt(process.env.TRACELOCAL_CONTROL_PORT, 4040),
     proxyHost: process.env.TRACELOCAL_PROXY_HOST,
-    proxyPort: parsePositiveInt(process.env.TRACELOCAL_PROXY_PORT, 8888),
-    maxSessions: parsePositiveInt(process.env.TRACELOCAL_MAX_SESSIONS, 500),
-    maxBodyPreviewBytes: parsePositiveInt(process.env.TRACELOCAL_BODY_PREVIEW_BYTES, 64 * 1024),
+    proxyPort: parseNonNegativeInt(process.env.TRACELOCAL_PROXY_PORT, 8888),
+    maxSessions: parseNonNegativeInt(process.env.TRACELOCAL_MAX_SESSIONS, 500),
+    maxBodyPreviewBytes: parseNonNegativeInt(
+      process.env.TRACELOCAL_BODY_PREVIEW_BYTES,
+      64 * 1024,
+    ),
+    upstreamTimeoutMs: parseNonNegativeInt(
+      process.env.TRACELOCAL_UPSTREAM_TIMEOUT_MS,
+      30_000,
+    ),
   });
 
   const status = await daemon.start();

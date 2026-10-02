@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import path from 'node:path';
 import { TraceLocalDaemon } from './daemon/server';
 
 function intOption(value: string): number {
@@ -12,22 +13,32 @@ function intOption(value: string): number {
 
 async function requestJson(
   controlUrl: string,
-  path: string,
+  requestPath: string,
   init?: RequestInit,
 ): Promise<unknown> {
-  const response = await fetch(new URL(path, controlUrl), init);
+  const response = await fetch(new URL(requestPath, controlUrl), init);
   const text = await response.text();
   const payload = text ? JSON.parse(text) : null;
 
   if (!response.ok) {
     const message =
-      payload && typeof payload === 'object' && 'error' in payload
-        ? String((payload as { error: unknown }).error)
-        : `HTTP ${response.status}`;
+      payload && typeof payload === 'object' && 'message' in payload
+        ? String((payload as { message: unknown }).message)
+        : payload && typeof payload === 'object' && 'error' in payload
+          ? String((payload as { error: unknown }).error)
+          : `HTTP ${response.status}`;
     throw new Error(message);
   }
 
   return payload;
+}
+
+function jsonRequest(method: string, body?: unknown): RequestInit {
+  return {
+    method,
+    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  };
 }
 
 async function main(): Promise<void> {
@@ -48,6 +59,7 @@ async function main(): Promise<void> {
     .option('--proxy-port <port>', 'proxy port', intOption, 8888)
     .option('--max-sessions <count>', 'maximum captures kept in memory', intOption, 500)
     .option('--body-preview-bytes <count>', 'maximum preview bytes per body', intOption, 64 * 1024)
+    .option('--upstream-timeout-ms <ms>', 'upstream request timeout', intOption, 30_000)
     .action(async (options) => {
       const daemon = new TraceLocalDaemon({
         controlHost: options.controlHost,
@@ -56,6 +68,7 @@ async function main(): Promise<void> {
         proxyPort: options.proxyPort,
         maxSessions: options.maxSessions,
         maxBodyPreviewBytes: options.bodyPreviewBytes,
+        upstreamTimeoutMs: options.upstreamTimeoutMs,
       });
 
       const status = await daemon.start();
@@ -102,11 +115,84 @@ async function main(): Promise<void> {
     .description('Clear captured sessions')
     .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
     .action(async (options) => {
-      const result = await requestJson(options.controlUrl, '/api/sessions', {
-        method: 'DELETE',
-      });
+      const result = await requestJson(
+        options.controlUrl,
+        '/api/sessions',
+        jsonRequest('DELETE'),
+      );
       console.log(JSON.stringify(result, null, 2));
     });
+
+  const map = program
+    .command('map')
+    .description('Manage Map Local rules');
+
+  map
+    .command('list')
+    .description('List Map Local rules')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .action(async (options) => {
+      const result = await requestJson(options.controlUrl, '/api/rules');
+      console.log(JSON.stringify(result, null, 2));
+    });
+
+  map
+    .command('add')
+    .argument('<pattern>', 'glob pattern to match')
+    .argument('<file>', 'local response file')
+    .description('Add a Map Local rule')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .option('--target <target>', 'url, host, or path', 'url')
+    .option('--method <method>', 'HTTP method or *', '*')
+    .option('--status <code>', 'response status code', intOption, 200)
+    .option('--content-type <value>', 'override response content type')
+    .option('--disabled', 'create the rule disabled')
+    .action(async (patternValue, file, options) => {
+      const result = await requestJson(
+        options.controlUrl,
+        '/api/rules',
+        jsonRequest('POST', {
+          pattern: patternValue,
+          filePath: path.resolve(file),
+          target: options.target,
+          method: options.method,
+          statusCode: options.status,
+          contentType: options.contentType,
+          enabled: options.disabled ? false : true,
+        }),
+      );
+      console.log(JSON.stringify(result, null, 2));
+    });
+
+  map
+    .command('remove')
+    .argument('<id>', 'rule id')
+    .description('Remove a Map Local rule')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .action(async (id, options) => {
+      const result = await requestJson(
+        options.controlUrl,
+        `/api/rules/${encodeURIComponent(id)}`,
+        jsonRequest('DELETE'),
+      );
+      console.log(JSON.stringify(result, null, 2));
+    });
+
+  for (const enabled of [true, false]) {
+    map
+      .command(enabled ? 'enable' : 'disable')
+      .argument('<id>', 'rule id')
+      .description(`${enabled ? 'Enable' : 'Disable'} a Map Local rule`)
+      .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+      .action(async (id, options) => {
+        const result = await requestJson(
+          options.controlUrl,
+          `/api/rules/${encodeURIComponent(id)}`,
+          jsonRequest('PATCH', { enabled }),
+        );
+        console.log(JSON.stringify(result, null, 2));
+      });
+  }
 
   await program.parseAsync(process.argv);
 }
