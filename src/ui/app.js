@@ -468,6 +468,19 @@
       $('#mobileProxyAddress').textContent = proxyAddr;
       const count = state.mobileStatus.activeClients || 0;
       $('#connectedDevices').textContent = count + (count === 1 ? ' active' : ' active');
+      const devices = state.mobileStatus.devices || [];
+      $('#deviceList').innerHTML = devices.map((device) =>
+        '<div class=\"device-row\" data-device=\"' + escapeHtml(device.sessionId) + '\">' +
+          '<div><strong>' + escapeHtml(device.name) + '</strong><span>' + escapeHtml(device.platform + ' · ' + device.state) + '</span></div>' +
+          '<button class=\"button ghost compact\" data-device-disconnect>Disconnect</button>' +
+        '</div>'
+      ).join('');
+      $('#deviceList [data-device]').forEach((row) => {
+        row.querySelector('[data-device-disconnect]').addEventListener('click', async () => {
+          try { await api('/api/devices/' + encodeURIComponent(row.dataset.device), { method: 'DELETE' }); await updateMobileStatus(); renderSettings(); }
+          catch (error) { toast('Could not disconnect device: ' + error.message); }
+        });
+      });
     }
 
     if (state.pairingToken) {
@@ -539,6 +552,11 @@
       renderSessions();
       renderDetail();
       renderStatus();
+    });
+    source.addEventListener('devices-changed', (event) => {
+      const payload = JSON.parse(event.data);
+      state.mobileStatus = { ...(state.mobileStatus || {}), activeClients: (payload.devices || []).length, devices: payload.devices || [] };
+      renderSettings();
     });
     source.addEventListener('rules-changed', (event) => {
       const payload = JSON.parse(event.data);
@@ -640,6 +658,10 @@
       copyText(element.textContent);
     }));
 
+    $('#disconnectAllDevices').addEventListener('click', async () => {
+      try { await api('/api/devices', { method: 'DELETE' }); await updateMobileStatus(); renderSettings(); }
+      catch (error) { toast('Could not disconnect devices: ' + error.message); }
+    });
     $('#generateQr').addEventListener('click', async () => {
       try {
         const tokenData = await api('/api/ca/mobile-token', { method: 'POST' });
