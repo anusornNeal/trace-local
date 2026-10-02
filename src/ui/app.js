@@ -138,6 +138,17 @@
     $('#detailContent').hidden = !session;
     if (!session) return;
 
+    // Handle detail load error state
+    if (session._detailLoadError) {
+      $('#detailMeta').textContent = 'Error loading details';
+      $('#detailUrl').textContent = session.url || session.id;
+      $('#detailFlags').innerHTML = '<span class="flag error">Failed to load full request details</span>';
+      $('#detailOverview').innerHTML = '<div class="block"><h3>Error</h3><pre>' + escapeHtml(session._detailLoadError) + '</pre></div>';
+      $('#detailRequest').innerHTML = '<div class="block"><p>Request details could not be loaded.</p></div>';
+      $('#detailResponse').innerHTML = '<div class="block"><p>Response details could not be loaded.</p></div>';
+      return;
+    }
+
     $('#detailMeta').textContent = [session.method, session.statusCode || 'No response', formatDuration(session.durationMs)].join(' · ');
     $('#detailUrl').textContent = session.url;
     const flags = [];
@@ -168,12 +179,33 @@
   }
 
   async function selectSession(id) {
+    // Find the session in the list to set selection optimistically
+    const listSession = state.sessions.find((s) => s.id === id);
+    if (!listSession) {
+      toast('Request not found');
+      return;
+    }
+
+    // Set selection immediately so the row highlights
+    state.selected = { ...listSession };
+    renderSessions();
+    renderDetail();
+
+    // Load full details in the background
     try {
-      state.selected = await api('/api/sessions/' + encodeURIComponent(id));
-      renderSessions();
-      renderDetail();
+      const fullSession = await api('/api/sessions/' + encodeURIComponent(id));
+      // Only update if this session is still selected
+      if (state.selected?.id === id) {
+        state.selected = fullSession;
+        renderDetail();
+      }
     } catch (error) {
-      toast('Could not load request: ' + error.message);
+      // Only update if this session is still selected
+      if (state.selected?.id === id) {
+        state.selected._detailLoadError = error.message;
+        renderDetail();
+      }
+      toast('Could not load request details: ' + error.message);
     }
   }
 
@@ -296,6 +328,12 @@
       const session = payload.session;
       state.sessions = [session, ...state.sessions.filter((item) => item.id !== session.id)].slice(0, 500);
       if (state.status) state.status.sessions = state.sessions.length;
+      // If the updated session is currently selected, refresh its list data while preserving full details
+      if (state.selected?.id === session.id && !state.selected._detailLoadError) {
+        // Update list fields but preserve detail fields that may have been loaded
+        state.selected = { ...state.selected, ...session };
+        renderDetail();
+      }
       renderSessions();
       renderStatus();
     });
@@ -339,8 +377,11 @@
         await api('/api/sessions', { method: 'DELETE' });
         state.sessions = [];
         state.selected = null;
-        renderSessions(); renderDetail();
-      } catch (error) { toast('Could not clear traffic: ' + error.message); }
+        renderSessions();
+        renderDetail();
+      } catch (error) {
+        toast('Could not clear traffic: ' + error.message);
+      }
     });
 
     $('#copyCurl').addEventListener('click', () => state.selected && copyText(curlFor(state.selected)));
