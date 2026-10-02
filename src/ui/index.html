@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trace Local</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">TL</div>
+        <div>
+          <strong>Trace Local</strong>
+          <span id="proxySummary">Starting proxy…</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="liveState" class="status-pill muted"><span class="dot"></span>Connecting</span>
+        <button id="clearSessions" class="button ghost">Clear</button>
+        <a class="button primary" href="/api/export/har" download="tracelocal.har">Export HAR</a>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="Main navigation">
+      <button class="tab active" data-tab="traffic">Traffic <span id="trafficCount" class="tab-count">0</span></button>
+      <button class="tab" data-tab="map">Map Local <span id="ruleCount" class="tab-count">0</span></button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <main>
+      <section id="trafficTab" class="tab-panel active">
+        <div class="traffic-layout">
+          <div class="sessions-pane">
+            <div class="toolbar">
+              <label class="search-wrap">
+                <span class="sr-only">Search traffic</span>
+                <input id="trafficSearch" type="search" placeholder="Filter URL or host">
+              </label>
+              <select id="methodFilter" aria-label="Method filter">
+                <option value="">All methods</option>
+                <option>GET</option><option>POST</option><option>PUT</option>
+                <option>PATCH</option><option>DELETE</option><option>OPTIONS</option>
+              </select>
+              <select id="statusFilter" aria-label="Status filter">
+                <option value="">All status</option>
+                <option value="2">2xx</option><option value="3">3xx</option>
+                <option value="4">4xx</option><option value="5">5xx</option>
+                <option value="error">Errors</option><option value="mapped">Mapped</option>
+              </select>
+            </div>
+            <div class="table-head session-grid">
+              <span>Method</span><span>Status</span><span>Host / Path</span><span>Time</span><span>Size</span>
+            </div>
+            <div id="sessionList" class="session-list" role="list"></div>
+            <div id="trafficEmpty" class="empty-state">
+              <div class="empty-icon">↗</div>
+              <h2>No traffic yet</h2>
+              <p>Configure your app or browser to use the proxy shown above. Requests will appear here live.</p>
+            </div>
+          </div>
+
+          <aside id="detailPane" class="detail-pane">
+            <div id="detailEmpty" class="detail-empty">
+              <span>Select a request to inspect details.</span>
+            </div>
+            <div id="detailContent" hidden>
+              <div class="detail-header">
+                <div>
+                  <div class="eyebrow" id="detailMeta"></div>
+                  <h2 id="detailUrl"></h2>
+                </div>
+                <button id="copyCurl" class="button ghost compact">Copy cURL</button>
+              </div>
+              <div id="detailFlags" class="detail-flags"></div>
+              <div class="detail-tabs">
+                <button class="detail-tab active" data-detail="overview">Overview</button>
+                <button class="detail-tab" data-detail="request">Request</button>
+                <button class="detail-tab" data-detail="response">Response</button>
+              </div>
+              <div id="detailOverview" class="detail-section active"></div>
+              <div id="detailRequest" class="detail-section"></div>
+              <div id="detailResponse" class="detail-section"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="mapTab" class="tab-panel">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">Response overrides</p>
+            <h1>Map Local</h1>
+            <p>Serve a local file instead of the upstream response when a request matches.</p>
+          </div>
+          <button id="openRuleForm" class="button primary">New rule</button>
+        </div>
+
+        <form id="ruleForm" class="rule-form" hidden>
+          <div class="form-grid">
+            <label>Match
+              <select id="ruleTarget"><option value="url">Full URL</option><option value="host">Host</option><option value="path">Path</option></select>
+            </label>
+            <label>Pattern
+              <input id="rulePattern" required placeholder="*://api.example.com/v1/*">
+            </label>
+            <label>Method
+              <input id="ruleMethod" value="*" placeholder="*">
+            </label>
+            <label>Status
+              <input id="ruleStatus" type="number" min="100" max="599" value="200">
+            </label>
+          </div>
+          <label>Local response file
+            <div class="file-row">
+              <input id="ruleFile" required placeholder="C:\path\to\response.json">
+              <button id="browseFile" type="button" class="button ghost">Browse…</button>
+            </div>
+          </label>
+          <label>Content-Type <span class="optional">optional</span>
+            <input id="ruleContentType" placeholder="application/json">
+          </label>
+          <div class="form-actions">
+            <button id="cancelRule" type="button" class="button ghost">Cancel</button>
+            <button type="submit" class="button primary">Add rule</button>
+          </div>
+          <p id="ruleFormError" class="form-error" hidden></p>
+        </form>
+
+        <div id="ruleList" class="rule-list"></div>
+        <div id="rulesEmpty" class="empty-state page-empty">
+          <div class="empty-icon">⇄</div>
+          <h2>No Map Local rules</h2>
+          <p>Create a rule to replace matching upstream responses with a local file.</p>
+        </div>
+      </section>
+
+      <section id="settingsTab" class="tab-panel">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">Local configuration</p>
+            <h1>Settings</h1>
+            <p>Proxy and certificate details for configuring development clients.</p>
+          </div>
+        </div>
+
+        <div class="settings-grid">
+          <article class="settings-card">
+            <h2>Proxy</h2>
+            <div class="setting-row"><span>Address</span><code id="proxyUrl">—</code><button class="copy-button" data-copy="proxyUrl">Copy</button></div>
+            <div class="setting-row"><span>Status</span><strong id="proxyStatus">—</strong></div>
+            <div class="setting-row"><span>Captured</span><strong id="sessionCount">0 requests</strong></div>
+          </article>
+
+          <article class="settings-card">
+            <h2>Certificate Authority</h2>
+            <div class="setting-row stacked"><span>Certificate path</span><code id="caPath">—</code><button class="copy-button" data-copy="caPath">Copy</button></div>
+            <div class="setting-row stacked"><span>SHA-256 fingerprint</span><code id="caFingerprint">—</code><button class="copy-button" data-copy="caFingerprint">Copy</button></div>
+            <div class="setting-row"><span>Expires</span><strong id="caExpiry">—</strong></div>
+            <div class="notice">
+              Trace Local never installs trust certificates automatically. Import this CA manually into the development device or app you control, then point its HTTP/HTTPS proxy to the address above.
+            </div>
+          </article>
+
+          <article class="settings-card">
+            <h2>Runtime</h2>
+            <div class="setting-row"><span>Version</span><code id="runtimeVersion">—</code></div>
+            <div class="setting-row"><span>Control UI</span><code id="controlUrl">—</code></div>
+            <div class="setting-row"><span>Live updates</span><strong id="sseStatus">Connecting</strong></div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

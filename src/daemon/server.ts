@@ -1,5 +1,7 @@
+import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import path from 'node:path';
 import {
   CertificateAuthorityManager,
   defaultTraceLocalDataDir,
@@ -88,6 +90,48 @@ function asObject(value: unknown): Record<string, unknown> {
     throw new Error('JSON body must be an object');
   }
   return value as Record<string, unknown>;
+}
+
+const UI_ASSETS: Record<
+  string,
+  { file: string; contentType: string }
+> = {
+  '/': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
+  '/index.html': { file: 'index.html', contentType: 'text/html; charset=utf-8' },
+  '/styles.css': { file: 'styles.css', contentType: 'text/css; charset=utf-8' },
+  '/app.js': { file: 'app.js', contentType: 'text/javascript; charset=utf-8' },
+};
+
+async function tryServeUiAsset(
+  pathname: string,
+  response: http.ServerResponse,
+): Promise<boolean> {
+  const asset = UI_ASSETS[pathname];
+  if (!asset) return false;
+
+  const filePath = path.resolve(__dirname, '..', 'ui', asset.file);
+
+  try {
+    const body = await readFile(filePath);
+    response.writeHead(200, {
+      'content-type': asset.contentType,
+      'content-length': body.length,
+      'cache-control': 'no-store',
+      'content-security-policy':
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'referrer-policy': 'no-referrer',
+    });
+    response.end(body);
+  } catch (error) {
+    sendJson(response, 503, {
+      error: 'ui_unavailable',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return true;
 }
 
 export class TraceLocalDaemon {
@@ -289,6 +333,10 @@ export class TraceLocalDaemon {
   ): Promise<void> {
     const method = request.method ?? 'GET';
     const url = new URL(request.url ?? '/', 'http://localhost');
+
+    if (method === 'GET' && (await tryServeUiAsset(url.pathname, response))) {
+      return;
+    }
 
     if (method === 'GET' && (url.pathname === '/health' || url.pathname === '/api/status')) {
       sendJson(response, 200, this.status);
