@@ -94,3 +94,27 @@ export interface DaemonStatus {
   rules: number;
   warnings: string[];
 }
+
+
+export type PairingProtocolVersion = 1;
+
+export interface PairingSetupResponse {
+  protocolVersion: PairingProtocolVersion;
+  url: string;
+  qrSvg: string;
+  expiresAt: number;
+  ttlSeconds: number;
+  desktopId: string;
+  proxyAddress: string;
+  caFingerprint256: string;
+}
+
+export interface PairingPayloadV1 {
+  protocolVersion: PairingProtocolVersion;
+  pairingId: string;
+  desktopId: string;
+  proxyAddress: string;
+  caFingerprint256: string;
+  issuedAt: number;
+  expiresAt: number;
+}

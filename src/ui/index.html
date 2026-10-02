@@ -176,9 +176,23 @@
                 </div>
               </div>
             </div>
-            <button id="generateQr" class="button primary">Generate QR Code</button>
+            <button id="generateQr" class="button ghost">Generate CA install QR</button>
+            <div class="mobile-pairing">
+              <h3>Companion pairing</h3>
+              <div id="pairingQrSection" hidden>
+                <div class="qr-container">
+                  <div id="pairingQrSvg" class="pairing-qr" aria-label="Pairing QR code"></div>
+                  <div class="qr-info">
+                    <p class="qr-expires">Expires in <strong id="pairingQrExpiry">—</strong></p>
+                    <code id="pairingDesktopId">—</code>
+                    <button id="copyPairingLink" class="button ghost compact">Copy pairing link</button>
+                  </div>
+                </div>
+              </div>
+              <button id="generatePairingQr" class="button primary">Pair mobile device</button>
+            </div>
             <div class="notice mobile-notice">
-              Scan the QR code from a device on the same WiFi network to download the CA certificate. The link expires after 15 minutes. Configure the device's proxy to the address shown above, then install the certificate to trust HTTPS traffic.
+              Pairing QR codes are single-use and expire quickly. The QR contains only a short-lived LAN pairing URL. CA private-key material is never included. Use the separate CA install QR when the device still needs the Trace Local CA.
             </div>
           </article>
 

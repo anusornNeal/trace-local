@@ -13,6 +13,8 @@
     mobileStatus: null,
     mobileToken: null,
     qrExpiryTimer: null,
+    pairingToken: null,
+    pairingExpiryTimer: null,
     collapsedHosts: new Set(),
     contextSessionId: null,
   };
@@ -420,6 +422,21 @@
       $('#connectedDevices').textContent = count + (count === 1 ? ' active' : ' active');
     }
 
+    if (state.pairingToken) {
+      const pairingRemaining = Math.max(0, state.pairingToken.expiresAt - Date.now());
+      const pairingMinutes = Math.floor(pairingRemaining / 60000);
+      const pairingSeconds = Math.floor((pairingRemaining % 60000) / 1000);
+      $('#pairingQrExpiry').textContent = pairingRemaining > 0 ? pairingMinutes + 'm ' + pairingSeconds + 's' : 'expired';
+      $('#pairingDesktopId').textContent = state.pairingToken.desktopId || '—';
+
+      if (pairingRemaining <= 0) {
+        clearInterval(state.pairingExpiryTimer);
+        $('#pairingQrSection').hidden = true;
+        $('#generatePairingQr').hidden = false;
+        state.pairingToken = null;
+      }
+    }
+
     if (state.mobileToken) {
       const now = Date.now();
       const remaining = Math.max(0, state.mobileToken.expiresAt - now);
@@ -588,6 +605,26 @@
       if (state.mobileToken) {
         copyText(state.mobileToken.url);
       }
+    });
+
+    $('#generatePairingQr').addEventListener('click', async () => {
+      try {
+        const pairing = await api('/api/pairing/token', { method: 'POST' });
+        state.pairingToken = pairing;
+        $('#pairingQrSvg').innerHTML = pairing.qrSvg;
+        $('#pairingQrSection').hidden = false;
+        $('#generatePairingQr').hidden = true;
+        clearInterval(state.pairingExpiryTimer);
+        state.pairingExpiryTimer = setInterval(renderSettings, 1000);
+        renderSettings();
+        toast('Pairing QR generated');
+      } catch (error) {
+        toast('Failed to generate pairing QR: ' + error.message);
+      }
+    });
+
+    $('#copyPairingLink').addEventListener('click', () => {
+      if (state.pairingToken) copyText(state.pairingToken.url);
     });
   }
 

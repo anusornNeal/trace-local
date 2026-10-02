@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
+import QRCode from 'qrcode';
 import {
   CertificateAuthorityManager,
   defaultTraceLocalDataDir,
@@ -17,6 +18,7 @@ import type {
 import { buildHar } from '../export/har';
 import { MapRuleStore } from '../map-local/rule-store';
 import { InterceptProxy } from '../proxy/intercept-proxy';
+import { PairingTokenStore, PAIRING_PROTOCOL_VERSION } from '../pairing/pairing-store';
 import {
   parseRuleStateDocument,
   RuleStateRepository,
@@ -142,6 +144,7 @@ export class TraceLocalDaemon {
   readonly caManager: CertificateAuthorityManager;
   readonly ruleState: RuleStateRepository;
   readonly caTokenServer: CaTokenServer;
+  readonly pairingTokens: PairingTokenStore;
   readonly dataDir: string;
   proxy?: InterceptProxy;
 
@@ -160,6 +163,7 @@ export class TraceLocalDaemon {
     this.caManager = new CertificateAuthorityManager(this.dataDir);
     this.ruleState = new RuleStateRepository(this.dataDir);
     this.caTokenServer = new CaTokenServer();
+    this.pairingTokens = new PairingTokenStore();
     this.store.subscribe((event) => this.broadcastEvent(event.type, event));
   }
 
@@ -384,6 +388,40 @@ export class TraceLocalDaemon {
   private async handleMobileCaRequest(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     const method = request.method ?? 'GET';
     const url = new URL(request.url ?? '/', 'http://localhost');
+
+    if (method === 'GET' && url.pathname.startsWith('/pair/')) {
+      if (url.searchParams.get('v') !== String(PAIRING_PROTOCOL_VERSION)) {
+        sendJson(response, 400, { error: 'unsupported_pairing_protocol' });
+        return;
+      }
+
+      const token = url.pathname.slice('/pair/'.length);
+      const pairing = this.pairingTokens.redeem(token);
+      if (!pairing) {
+        sendJson(response, 410, { error: 'pairing_token_expired_or_used' });
+        return;
+      }
+
+      const metadata = this.caMetadata ?? (await this.caManager.metadata());
+      this.caMetadata = metadata;
+      const lanAddress = getPrimaryLanAddress();
+      const proxyPort = this.proxy?.status.port ?? 0;
+      if (!lanAddress || proxyPort === 0) {
+        sendJson(response, 503, { error: 'pairing_endpoint_unavailable' });
+        return;
+      }
+
+      sendJson(response, 200, {
+        protocolVersion: PAIRING_PROTOCOL_VERSION,
+        pairingId: pairing.pairingId,
+        desktopId: this.desktopId(metadata.fingerprint256),
+        proxyAddress: lanAddress + ':' + proxyPort,
+        caFingerprint256: metadata.fingerprint256,
+        issuedAt: pairing.createdAt,
+        expiresAt: pairing.expiresAt,
+      });
+      return;
+    }
     if (method !== 'GET' || !url.pathname.startsWith('/ca/')) {
       sendText(response, 404, 'text/plain; charset=utf-8', 'Not found');
       return;
@@ -401,6 +439,11 @@ export class TraceLocalDaemon {
       'cache-control': 'no-store',
     });
     response.end(material.cert);
+  }
+
+  private desktopId(fingerprint256: string): string {
+    const compact = fingerprint256.replace(/[^A-Fa-f0-9]/g, '').toLowerCase();
+    return 'trace-local-' + compact.slice(0, 16);
   }
 
   private async handleControlRequest(
@@ -444,6 +487,33 @@ export class TraceLocalDaemon {
       return;
     }
 
+    if (method === 'POST' && url.pathname === '/api/pairing/token') {
+      const lanAddress = getPrimaryLanAddress();
+      const proxyPort = this.proxy?.status.port ?? 0;
+      const metadata = this.caMetadata ?? (await this.caManager.metadata());
+      this.caMetadata = metadata;
+
+      if (!lanAddress || this.mobileCaPort === 0 || proxyPort === 0) {
+        sendJson(response, 503, { error: 'pairing_unavailable', message: 'No LAN-reachable pairing endpoint is available.' });
+        return;
+      }
+
+      const pairing = this.pairingTokens.create();
+      const pairingUrl = 'http://' + lanAddress + ':' + this.mobileCaPort + '/pair/' + pairing.token + '?v=' + PAIRING_PROTOCOL_VERSION;
+      const qrSvg = await QRCode.toString(pairingUrl, { type: 'svg', errorCorrectionLevel: 'M', margin: 2, width: 240 });
+
+      sendJson(response, 201, {
+        protocolVersion: PAIRING_PROTOCOL_VERSION,
+        url: pairingUrl,
+        qrSvg,
+        expiresAt: pairing.expiresAt,
+        ttlSeconds: Math.max(0, Math.floor((pairing.expiresAt - Date.now()) / 1000)),
+        desktopId: this.desktopId(metadata.fingerprint256),
+        proxyAddress: lanAddress + ':' + proxyPort,
+        caFingerprint256: metadata.fingerprint256,
+      });
+      return;
+    }
     if (method === 'POST' && url.pathname === '/api/ca/mobile-token') {
       const lanAddress = getPrimaryLanAddress();
       if (!lanAddress || this.mobileCaPort === 0) {
