@@ -5,6 +5,24 @@ import { TraceLocalDaemon } from './daemon/server';
 let mainWindow: BrowserWindow | null = null;
 let daemon: TraceLocalDaemon | null = null;
 let shuttingDown = false;
+let readinessEmitted = false;
+
+const e2eMode = process.env.TRACELOCAL_E2E === '1';
+const electronUserDataDir = process.env.TRACELOCAL_ELECTRON_USER_DATA_DIR?.trim();
+if (electronUserDataDir) {
+  app.setPath('userData', path.resolve(electronUserDataDir));
+}
+
+function portFromEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isInteger(value) || value < 0 || value > 65_535) {
+    throw new Error(`Invalid ${name}: ${raw}`);
+  }
+  return value;
+}
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -30,10 +48,12 @@ function isAddressInUse(error: unknown): boolean {
 }
 
 async function startDesktopDaemon(proxyPort: number): Promise<TraceLocalDaemon> {
+  const dataDir = process.env.TRACELOCAL_DATA_DIR?.trim();
   const candidate = new TraceLocalDaemon({
     controlHost: '127.0.0.1',
-    controlPort: 0,
+    controlPort: portFromEnv('TRACELOCAL_CONTROL_PORT') ?? 0,
     proxyPort,
+    dataDir: dataDir ? path.resolve(dataDir) : undefined,
   });
   await candidate.start();
   return candidate;
@@ -41,10 +61,13 @@ async function startDesktopDaemon(proxyPort: number): Promise<TraceLocalDaemon> 
 
 async function createMainWindow(): Promise<void> {
   if (!daemon) {
+    const configuredProxyPort = portFromEnv('TRACELOCAL_PROXY_PORT');
+    const preferredProxyPort = configuredProxyPort ?? 8888;
+
     try {
-      daemon = await startDesktopDaemon(8888);
+      daemon = await startDesktopDaemon(preferredProxyPort);
     } catch (error) {
-      if (!isAddressInUse(error)) throw error;
+      if (configuredProxyPort !== undefined || !isAddressInUse(error)) throw error;
       console.warn('Proxy port 8888 is already in use; falling back to a free port.');
       daemon = await startDesktopDaemon(0);
     }
@@ -79,7 +102,9 @@ async function createMainWindow(): Promise<void> {
     return { action: 'deny' };
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => {
+    if (!e2eMode) mainWindow?.show();
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -87,6 +112,11 @@ async function createMainWindow(): Promise<void> {
   await mainWindow.loadURL(
     `http://127.0.0.1:${daemon.status.controlPort}/`,
   );
+
+  if (e2eMode && !readinessEmitted) {
+    readinessEmitted = true;
+    console.log(`TRACELOCAL_E2E_READY ${JSON.stringify(daemon.status)}`);
+  }
 }
 
 ipcMain.handle('tracelocal:choose-file', async () => {
@@ -101,6 +131,13 @@ ipcMain.handle('tracelocal:choose-file', async () => {
 app.on('second-instance', () => {
   focusMainWindow();
 });
+
+if (e2eMode) {
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    if (chunk.includes('quit')) app.quit();
+  });
+}
 
 app.whenReady().then(() => {
   void createMainWindow().catch((error) => {

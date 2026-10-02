@@ -38,7 +38,10 @@ npm test
 npm run typecheck
 npm run build
 npm run audit:prod
+npm run e2e:desktop
 ```
+
+`e2e:desktop` launches the real Electron entry with temporary ports, Trace Local data, and Electron user data. It sends real proxy traffic, verifies capture and Map Local behavior, then checks that the proxy/control ports are released without touching normal user state.
 
 The production audit is expected to report no high-severity vulnerabilities. The project pins `basic-ftp` 6.2.1 through an npm override because Mockttp's proxy dependency chain otherwise resolves an affected 5.x release.
 
