@@ -171,6 +171,7 @@ test('daemon exposes Map Local rule CRUD API', async () => {
     controlPort: 0,
     proxyHost: '127.0.0.1',
     proxyPort: 0,
+    dataDir: path.join(tempDir, 'data'),
   });
 
   try {
@@ -194,6 +195,13 @@ test('daemon exposes Map Local rule CRUD API', async () => {
     const listResponse = await fetch(`${base}/api/rules`);
     const list = (await listResponse.json()) as { rules: Array<{ id: string }> };
     assert.deepEqual(list.rules.map((rule) => rule.id), [created.id]);
+
+    const mapped = await proxyRequest(
+      status.proxy.port,
+      'http://unreachable.invalid/local/smoke',
+    );
+    assert.equal(mapped.statusCode, 200);
+    assert.equal(mapped.body, 'hello');
 
     const disableResponse = await fetch(`${base}/api/rules/${created.id}`, {
       method: 'PATCH',

@@ -5,6 +5,7 @@ function toSummary(record: SessionRecord): SessionSummary {
     id: record.id,
     startedAt: record.startedAt,
     durationMs: record.durationMs,
+    protocol: record.protocol,
     method: record.method,
     url: record.url,
     host: record.host,

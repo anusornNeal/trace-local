@@ -11,26 +11,40 @@ function intOption(value: string): number {
   return parsed;
 }
 
+async function request(
+  controlUrl: string,
+  requestPath: string,
+  init?: RequestInit,
+): Promise<Response> {
+  const response = await fetch(new URL(requestPath, controlUrl), init);
+  if (!response.ok) {
+    const text = await response.text();
+    let message = `HTTP ${response.status}`;
+    try {
+      const payload = text ? JSON.parse(text) : null;
+      if (payload && typeof payload === 'object' && 'message' in payload) {
+        message = String((payload as { message: unknown }).message);
+      } else if (payload && typeof payload === 'object' && 'error' in payload) {
+        message = String((payload as { error: unknown }).error);
+      }
+    } catch {
+      if (text) {
+        message = text;
+      }
+    }
+    throw new Error(message);
+  }
+  return response;
+}
+
 async function requestJson(
   controlUrl: string,
   requestPath: string,
   init?: RequestInit,
 ): Promise<unknown> {
-  const response = await fetch(new URL(requestPath, controlUrl), init);
+  const response = await request(controlUrl, requestPath, init);
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-
-  if (!response.ok) {
-    const message =
-      payload && typeof payload === 'object' && 'message' in payload
-        ? String((payload as { message: unknown }).message)
-        : payload && typeof payload === 'object' && 'error' in payload
-          ? String((payload as { error: unknown }).error)
-          : `HTTP ${response.status}`;
-    throw new Error(message);
-  }
-
-  return payload;
+  return text ? JSON.parse(text) : null;
 }
 
 function jsonRequest(method: string, body?: unknown): RequestInit {
@@ -41,34 +55,56 @@ function jsonRequest(method: string, body?: unknown): RequestInit {
   };
 }
 
+function trustInstructions(certPath: string): string[] {
+  if (process.platform === 'win32') {
+    return [
+      'Windows Current User trust store (run only if you intend to trust Trace Local):',
+      `certutil -user -addstore Root "${certPath}"`,
+    ];
+  }
+
+  if (process.platform === 'darwin') {
+    return [
+      'macOS login keychain (run only if you intend to trust Trace Local):',
+      `security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain-db "${certPath}"`,
+    ];
+  }
+
+  return [
+    'Linux system trust (distribution-specific; run only if you intend to trust Trace Local):',
+    `sudo cp "${certPath}" /usr/local/share/ca-certificates/tracelocal.crt`,
+    'sudo update-ca-certificates',
+  ];
+}
+
 async function main(): Promise<void> {
   const { Command } = await import('commander');
   const program = new Command();
 
   program
     .name('tracelocal')
-    .description('Local HTTP traffic inspector and Map Local proxy')
+    .description('Local HTTP/HTTPS traffic inspector and Map Local proxy')
     .version('0.1.0');
 
   program
     .command('start')
-    .description('Start the Trace Local daemon and HTTP proxy')
+    .description('Start the Trace Local daemon and intercepting proxy')
     .option('--control-host <host>', 'control API bind host', '127.0.0.1')
     .option('--control-port <port>', 'control API port', intOption, 4040)
-    .option('--proxy-host <host>', 'proxy bind host', '127.0.0.1')
-    .option('--proxy-port <port>', 'proxy port', intOption, 8888)
+    .option('--proxy-port <port>', 'HTTP/HTTPS proxy port', intOption, 8888)
     .option('--max-sessions <count>', 'maximum captures kept in memory', intOption, 500)
     .option('--body-preview-bytes <count>', 'maximum preview bytes per body', intOption, 64 * 1024)
-    .option('--upstream-timeout-ms <ms>', 'upstream request timeout', intOption, 30_000)
+    .option('--data-dir <path>', 'Trace Local data directory')
+    .option('--allow-remote', 'allow LAN/non-loopback clients; disabled by default')
     .action(async (options) => {
       const daemon = new TraceLocalDaemon({
         controlHost: options.controlHost,
         controlPort: options.controlPort,
-        proxyHost: options.proxyHost,
         proxyPort: options.proxyPort,
         maxSessions: options.maxSessions,
         maxBodyPreviewBytes: options.bodyPreviewBytes,
-        upstreamTimeoutMs: options.upstreamTimeoutMs,
+        dataDir: options.dataDir ? path.resolve(options.dataDir) : undefined,
+        allowRemote: Boolean(options.allowRemote),
       });
 
       const status = await daemon.start();
@@ -123,9 +159,7 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(result, null, 2));
     });
 
-  const map = program
-    .command('map')
-    .description('Manage Map Local rules');
+  const map = program.command('map').description('Manage Map Local rules');
 
   map
     .command('list')
@@ -193,6 +227,47 @@ async function main(): Promise<void> {
         console.log(JSON.stringify(result, null, 2));
       });
   }
+
+  const ca = program.command('ca').description('Inspect the local HTTPS interception CA');
+
+  ca
+    .command('status')
+    .description('Show public CA metadata')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .action(async (options) => {
+      console.log(JSON.stringify(await requestJson(options.controlUrl, '/api/ca'), null, 2));
+    });
+
+  ca
+    .command('path')
+    .description('Print the public CA certificate path')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .action(async (options) => {
+      const metadata = (await requestJson(options.controlUrl, '/api/ca')) as {
+        certPath: string;
+      };
+      console.log(metadata.certPath);
+    });
+
+  ca
+    .command('cert')
+    .description('Print the public CA certificate PEM')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .action(async (options) => {
+      const response = await request(options.controlUrl, '/api/ca/cert');
+      process.stdout.write(await response.text());
+    });
+
+  ca
+    .command('instructions')
+    .description('Print manual OS trust installation guidance; does not install anything')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .action(async (options) => {
+      const metadata = (await requestJson(options.controlUrl, '/api/ca')) as {
+        certPath: string;
+      };
+      console.log(trustInstructions(metadata.certPath).join('\n'));
+    });
 
   await program.parseAsync(process.argv);
 }

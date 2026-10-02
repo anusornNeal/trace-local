@@ -64,6 +64,7 @@ export interface SessionSummary {
   id: string;
   startedAt: number;
   durationMs?: number;
+  protocol: string;
   method: string;
   url: string;
   host: string;

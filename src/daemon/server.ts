@@ -1,5 +1,9 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import {
+  CertificateAuthorityManager,
+  type CertificateAuthorityMetadata,
+} from '../certificates/ca-manager';
 import { SessionStore } from '../core/session-store';
 import type {
   CreateMapRuleInput,
@@ -7,7 +11,7 @@ import type {
   UpdateMapRuleInput,
 } from '../core/types';
 import { MapRuleStore } from '../map-local/rule-store';
-import { HttpCaptureProxy } from '../proxy/http-proxy';
+import { InterceptProxy } from '../proxy/intercept-proxy';
 
 const VERSION = '0.1.0';
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
@@ -15,11 +19,12 @@ const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 export interface TraceLocalDaemonOptions {
   controlHost?: string;
   controlPort?: number;
-  proxyHost?: string;
   proxyPort?: number;
   maxSessions?: number;
   maxBodyPreviewBytes?: number;
-  upstreamTimeoutMs?: number;
+  dataDir?: string;
+  allowRemote?: boolean;
+  additionalTrustedCaCerts?: string[];
 }
 
 function parseNonNegativeInt(value: string | undefined, fallback: number): number {
@@ -34,6 +39,19 @@ function sendJson(response: http.ServerResponse, statusCode: number, value: unkn
   const body = JSON.stringify(value, null, 2);
   response.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+  });
+  response.end(body);
+}
+
+function sendText(
+  response: http.ServerResponse,
+  statusCode: number,
+  contentType: string,
+  body: string,
+): void {
+  response.writeHead(statusCode, {
+    'content-type': contentType,
     'content-length': Buffer.byteLength(body),
   });
   response.end(body);
@@ -73,39 +91,56 @@ function asObject(value: unknown): Record<string, unknown> {
 export class TraceLocalDaemon {
   readonly store: SessionStore;
   readonly rules: MapRuleStore;
-  readonly proxy: HttpCaptureProxy;
+  readonly caManager: CertificateAuthorityManager;
+  proxy?: InterceptProxy;
 
   private controlServer?: http.Server;
   private controlPort = 0;
+  private caMetadata?: CertificateAuthorityMetadata;
 
   constructor(private readonly options: TraceLocalDaemonOptions = {}) {
     this.store = new SessionStore(options.maxSessions ?? 500);
     this.rules = new MapRuleStore();
-    this.proxy = new HttpCaptureProxy(this.store, {
-      host: options.proxyHost,
-      port: options.proxyPort,
-      maxBodyPreviewBytes: options.maxBodyPreviewBytes,
-      upstreamTimeoutMs: options.upstreamTimeoutMs,
-      ruleStore: this.rules,
-    });
+    this.caManager = new CertificateAuthorityManager(options.dataDir);
   }
 
   get status(): DaemonStatus {
     return {
       version: VERSION,
       controlPort: this.controlPort,
-      proxy: this.proxy.status,
+      proxy: this.proxy?.status ?? {
+        running: false,
+        port: 0,
+        proxyUrl: null,
+        caCertPath: this.caManager.certPath,
+      },
       sessions: this.store.size,
       rules: this.rules.size,
     };
   }
 
   async start(): Promise<DaemonStatus> {
-    if (this.controlServer) {
+    if (this.controlServer && this.proxy) {
       return this.status;
     }
 
-    await this.proxy.start();
+    const ca = await this.caManager.ensure();
+    this.caMetadata = {
+      certPath: ca.certPath,
+      fingerprint256: ca.fingerprint256,
+      expiresAt: ca.expiresAt,
+    };
+
+    const proxy = new InterceptProxy(this.store, {
+      port: this.options.proxyPort,
+      maxBodyPreviewBytes: this.options.maxBodyPreviewBytes,
+      ruleStore: this.rules,
+      ca,
+      allowRemote: this.options.allowRemote,
+      additionalTrustedCaCerts: this.options.additionalTrustedCaCerts,
+    });
+    await proxy.start();
+    this.proxy = proxy;
 
     const controlHost = this.options.controlHost ?? '127.0.0.1';
     const controlPort = this.options.controlPort ?? 4040;
@@ -124,22 +159,23 @@ export class TraceLocalDaemon {
 
     try {
       await new Promise<void>((resolve, reject) => {
-        const server = this.controlServer!;
+        const controlServer = this.controlServer!;
         const onError = (error: Error) => {
-          server.off('listening', onListening);
+          controlServer.off('listening', onListening);
           reject(error);
         };
         const onListening = () => {
-          server.off('error', onError);
+          controlServer.off('error', onError);
           resolve();
         };
-        server.once('error', onError);
-        server.once('listening', onListening);
-        server.listen(controlPort, controlHost);
+        controlServer.once('error', onError);
+        controlServer.once('listening', onListening);
+        controlServer.listen(controlPort, controlHost);
       });
     } catch (error) {
       this.controlServer = undefined;
-      await this.proxy.stop();
+      this.proxy = undefined;
+      await proxy.stop();
       throw error;
     }
 
@@ -150,7 +186,9 @@ export class TraceLocalDaemon {
 
   async stop(): Promise<void> {
     const controlServer = this.controlServer;
+    const proxy = this.proxy;
     this.controlServer = undefined;
+    this.proxy = undefined;
 
     if (controlServer) {
       await new Promise<void>((resolve, reject) => {
@@ -158,8 +196,14 @@ export class TraceLocalDaemon {
       });
     }
 
-    await this.proxy.stop();
+    if (proxy) {
+      await proxy.stop();
+    }
     this.controlPort = 0;
+  }
+
+  private async refreshProxyRules(): Promise<void> {
+    await this.proxy?.refreshRules();
   }
 
   private async handleControlRequest(
@@ -171,6 +215,19 @@ export class TraceLocalDaemon {
 
     if (method === 'GET' && (url.pathname === '/health' || url.pathname === '/api/status')) {
       sendJson(response, 200, this.status);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/api/ca') {
+      const metadata = this.caMetadata ?? (await this.caManager.metadata());
+      this.caMetadata = metadata;
+      sendJson(response, 200, metadata);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/api/ca/cert') {
+      const material = await this.caManager.ensure();
+      sendText(response, 200, 'application/x-pem-file; charset=utf-8', material.cert);
       return;
     }
 
@@ -210,6 +267,7 @@ export class TraceLocalDaemon {
       try {
         const input = asObject(await readJsonBody(request)) as unknown as CreateMapRuleInput;
         const rule = this.rules.create(input);
+        await this.refreshProxyRules();
         sendJson(response, 201, rule);
       } catch (error) {
         sendJson(response, 400, {
@@ -231,6 +289,7 @@ export class TraceLocalDaemon {
             sendJson(response, 404, { error: 'rule_not_found', id });
             return;
           }
+          await this.refreshProxyRules();
           sendJson(response, 200, rule);
         } catch (error) {
           sendJson(response, 400, {
@@ -246,6 +305,7 @@ export class TraceLocalDaemon {
           sendJson(response, 404, { error: 'rule_not_found', id });
           return;
         }
+        await this.refreshProxyRules();
         sendJson(response, 200, { deleted: true, id });
         return;
       }
@@ -259,22 +319,19 @@ async function runStandalone(): Promise<void> {
   const daemon = new TraceLocalDaemon({
     controlHost: process.env.TRACELOCAL_CONTROL_HOST,
     controlPort: parseNonNegativeInt(process.env.TRACELOCAL_CONTROL_PORT, 4040),
-    proxyHost: process.env.TRACELOCAL_PROXY_HOST,
     proxyPort: parseNonNegativeInt(process.env.TRACELOCAL_PROXY_PORT, 8888),
     maxSessions: parseNonNegativeInt(process.env.TRACELOCAL_MAX_SESSIONS, 500),
     maxBodyPreviewBytes: parseNonNegativeInt(
       process.env.TRACELOCAL_BODY_PREVIEW_BYTES,
       64 * 1024,
     ),
-    upstreamTimeoutMs: parseNonNegativeInt(
-      process.env.TRACELOCAL_UPSTREAM_TIMEOUT_MS,
-      30_000,
-    ),
+    dataDir: process.env.TRACELOCAL_DATA_DIR,
+    allowRemote: process.env.TRACELOCAL_ALLOW_REMOTE === '1',
   });
 
   const status = await daemon.start();
   process.stdout.write(
-    `Trace Local daemon running\nControl: http://127.0.0.1:${status.controlPort}\nProxy: ${status.proxy.proxyUrl}\n`,
+    `Trace Local daemon running\nControl: http://127.0.0.1:${status.controlPort}\nProxy: ${status.proxy.proxyUrl}\nCA: ${status.proxy.caCertPath}\n`,
   );
 
   const shutdown = async () => {
