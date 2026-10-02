@@ -18,14 +18,36 @@ function focusMainWindow(): void {
   mainWindow.focus();
 }
 
+function isAddressInUse(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  const withCode = error as Error & { code?: string; cause?: unknown };
+  return (
+    withCode.code === 'EADDRINUSE' ||
+    /EADDRINUSE|address already in use/i.test(error.message) ||
+    isAddressInUse(withCode.cause)
+  );
+}
+
+async function startDesktopDaemon(proxyPort: number): Promise<TraceLocalDaemon> {
+  const candidate = new TraceLocalDaemon({
+    controlHost: '127.0.0.1',
+    controlPort: 0,
+    proxyPort,
+  });
+  await candidate.start();
+  return candidate;
+}
+
 async function createMainWindow(): Promise<void> {
   if (!daemon) {
-    daemon = new TraceLocalDaemon({
-      controlHost: '127.0.0.1',
-      controlPort: 0,
-      proxyPort: 0,
-    });
-    await daemon.start();
+    try {
+      daemon = await startDesktopDaemon(8888);
+    } catch (error) {
+      if (!isAddressInUse(error)) throw error;
+      console.warn('Proxy port 8888 is already in use; falling back to a free port.');
+      daemon = await startDesktopDaemon(0);
+    }
   }
 
   if (mainWindow && !mainWindow.isDestroyed()) {

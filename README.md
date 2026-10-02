@@ -9,7 +9,7 @@ npm install
 npm run desktop
 ```
 
-The desktop app starts an embedded proxy on a free loopback port. Use the proxy address shown in the header or **Settings**.
+The desktop app prefers the stable loopback proxy address `http://127.0.0.1:8888`, matching the CLI default. If port 8888 is already occupied, it falls back to a free loopback port; the address shown in the header or **Settings** is always authoritative.
 
 For CLI-only development:
 
