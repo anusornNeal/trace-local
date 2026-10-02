@@ -37,7 +37,10 @@ Open **Map Local**, create a rule, choose a local response file, then match by f
 npm test
 npm run typecheck
 npm run build
+npm run audit:prod
 ```
+
+The production audit is expected to report no high-severity vulnerabilities. The project pins `basic-ftp` 6.2.1 through an npm override because Mockttp's proxy dependency chain otherwise resolves an affected 5.x release.
 
 ## Desktop packaging
 

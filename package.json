@@ -18,7 +18,8 @@
     "package:dir": "npm run build && electron-builder --dir",
     "package:win": "npm run build && electron-builder --win nsis",
     "package:mac": "npm run build && electron-builder --mac dmg zip",
-    "package:smoke": "node scripts/package-smoke.mjs"
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
   "keywords": [
     "proxy",
@@ -40,5 +41,8 @@
     "electron-builder": "^26.15.3",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "basic-ftp": "6.2.1"
   }
 }
