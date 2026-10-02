@@ -64,3 +64,9 @@ npm run package:mac
 ```
 
 Local builds are intentionally unsigned unless signing credentials are supplied by the release environment. Do not commit signing certificates or credentials.
+
+## Release verification CI
+
+GitHub Actions runs the production audit, tests, typecheck, build, unpacked packaging, and package smoke on both Windows and macOS for pull requests and pushes to `main`. The workflow uploads short-lived unsigned verification artifacts for inspection.
+
+CI artifacts are not trusted production installers. Code signing, Apple notarization, branded application icons, and final platform release validation belong to the release environment and require the corresponding credentials/assets.
