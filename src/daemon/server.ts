@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -198,6 +199,7 @@ export class TraceLocalDaemon {
     const ca = await this.caManager.ensure();
     this.caMetadata = {
       certPath: ca.certPath,
+      publicCertPath: ca.publicCertPath,
       fingerprint256: ca.fingerprint256,
       expiresAt: ca.expiresAt,
     };
@@ -435,7 +437,7 @@ export class TraceLocalDaemon {
     response.writeHead(200, {
       'content-type': 'application/x-pem-file; charset=utf-8',
       'content-length': Buffer.byteLength(material.cert),
-      'content-disposition': 'attachment; filename=\"tracelocal.crt\"',
+      'content-disposition': 'attachment; filename=\"tracelocal-ca.crt\"',
       'cache-control': 'no-store',
     });
     response.end(material.cert);
@@ -487,6 +489,18 @@ export class TraceLocalDaemon {
       return;
     }
 
+    if (method === 'POST' && url.pathname === '/api/ca/trust-probe') {
+      const body = asObject(await readJsonBody(request));
+      const supplied = typeof body.fingerprint256 === 'string' ? body.fingerprint256.trim() : '';
+      const metadata = this.caMetadata ?? (await this.caManager.metadata());
+      this.caMetadata = metadata;
+      const expected = metadata.fingerprint256;
+      const suppliedBytes = Buffer.from(supplied);
+      const expectedBytes = Buffer.from(expected);
+      const trusted = suppliedBytes.length === expectedBytes.length && timingSafeEqual(suppliedBytes, expectedBytes);
+      sendJson(response, 200, { trusted, fingerprint256: expected, publicCertPath: metadata.publicCertPath });
+      return;
+    }
     if (method === 'POST' && url.pathname === '/api/pairing/token') {
       const lanAddress = getPrimaryLanAddress();
       const proxyPort = this.proxy?.status.port ?? 0;

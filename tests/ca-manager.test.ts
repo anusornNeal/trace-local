@@ -21,11 +21,12 @@ test('CertificateAuthorityManager generates and reuses a stable valid CA', async
     const second = await secondManager.ensure();
 
     assert.equal(second.cert, first.cert);
+  assert.equal(await readFile(first.publicCertPath, 'utf8'), first.cert);
     assert.equal(second.fingerprint256, first.fingerprint256);
     assert.equal(second.certPath, first.certPath);
 
     const metadata = await secondManager.metadata();
-    assert.deepEqual(Object.keys(metadata).sort(), ['certPath', 'expiresAt', 'fingerprint256']);
+    assert.deepEqual(Object.keys(metadata).sort(), ['certPath', 'expiresAt', 'fingerprint256', 'publicCertPath']);
     assert.equal('key' in metadata, false);
     assert.equal('keyPath' in metadata, false);
   } finally {

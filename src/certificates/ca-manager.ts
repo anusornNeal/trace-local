@@ -13,12 +13,14 @@ export interface CertificateAuthorityMaterial {
   cert: string;
   keyPath: string;
   certPath: string;
+  publicCertPath: string;
   fingerprint256: string;
   expiresAt: string;
 }
 
 export interface CertificateAuthorityMetadata {
   certPath: string;
+  publicCertPath: string;
   fingerprint256: string;
   expiresAt: string;
 }
@@ -39,7 +41,7 @@ async function atomicWrite(filePath: string, content: string, mode: number): Pro
 
 function inspectPair(key: string, cert: string): Omit<
   CertificateAuthorityMaterial,
-  'key' | 'cert' | 'keyPath' | 'certPath'
+  'key' | 'cert' | 'keyPath' | 'certPath' | 'publicCertPath'
 > {
   const certificate = new X509Certificate(cert);
   const privateKey = createPrivateKey(key);
@@ -66,6 +68,7 @@ export class CertificateAuthorityManager {
   readonly certDir: string;
   readonly keyPath: string;
   readonly certPath: string;
+  readonly publicCertPath: string;
 
   private material?: CertificateAuthorityMaterial;
 
@@ -73,6 +76,7 @@ export class CertificateAuthorityManager {
     this.certDir = path.join(dataDir, 'certificates');
     this.keyPath = path.join(this.certDir, 'ca-key.pem');
     this.certPath = path.join(this.certDir, 'ca-cert.pem');
+    this.publicCertPath = path.join(this.certDir, 'tracelocal-ca.crt');
   }
 
   async ensure(): Promise<CertificateAuthorityMaterial> {
@@ -84,6 +88,7 @@ export class CertificateAuthorityManager {
 
     const existing = await this.tryReadValidPair();
     if (existing) {
+      await atomicWrite(this.publicCertPath, existing.cert, 0o644);
       this.material = existing;
       return { ...existing };
     }
@@ -100,12 +105,14 @@ export class CertificateAuthorityManager {
     const inspection = inspectPair(generated.key, generated.cert);
     await atomicWrite(this.keyPath, generated.key, 0o600);
     await atomicWrite(this.certPath, generated.cert, 0o644);
+    await atomicWrite(this.publicCertPath, generated.cert, 0o644);
 
     const material: CertificateAuthorityMaterial = {
       key: generated.key,
       cert: generated.cert,
       keyPath: this.keyPath,
       certPath: this.certPath,
+      publicCertPath: this.publicCertPath,
       ...inspection,
     };
 
@@ -117,6 +124,7 @@ export class CertificateAuthorityManager {
     const material = await this.ensure();
     return {
       certPath: material.certPath,
+      publicCertPath: material.publicCertPath,
       fingerprint256: material.fingerprint256,
       expiresAt: material.expiresAt,
     };
@@ -135,6 +143,7 @@ export class CertificateAuthorityManager {
         cert,
         keyPath: this.keyPath,
         certPath: this.certPath,
+        publicCertPath: this.publicCertPath,
         ...inspection,
       };
     } catch {
