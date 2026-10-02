@@ -160,6 +160,28 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(result, null, 2));
     });
 
+  program
+    .command('export-har')
+    .argument('[file]', 'optional destination HAR file')
+    .description('Export captured traffic as HAR 1.2')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .option('--limit <count>', 'maximum captures to export', intOption, 500)
+    .action(async (file, options) => {
+      const result = await requestJson(
+        options.controlUrl,
+        `/api/export/har?limit=${encodeURIComponent(String(options.limit))}`,
+      );
+      const output = `${JSON.stringify(result, null, 2)}\n`;
+
+      if (file) {
+        const destination = path.resolve(file);
+        await writeFile(destination, output, 'utf8');
+        console.log(destination);
+      } else {
+        process.stdout.write(output);
+      }
+    });
+
   const map = program.command('map').description('Manage Map Local rules');
 
   map

@@ -207,8 +207,23 @@ export class InterceptProxy {
       this.endpointToMapRule.set(endpoint.id, rule.id);
     }
 
+    const trustedCAs = this.options.additionalTrustedCaCerts?.map((cert) => ({ cert }));
     await server.forAnyRequest().thenPassThrough({
-      additionalTrustedCAs: this.options.additionalTrustedCaCerts?.map((cert) => ({ cert })),
+      additionalTrustedCAs: trustedCAs,
+    });
+    if (!this.options.allowRemote) {
+      await server
+        .forAnyWebSocket()
+        .matching((request) => !isLoopback(request.remoteIpAddress))
+        .thenRejectConnection(
+          403,
+          'Forbidden',
+          { 'content-type': 'text/plain; charset=utf-8' },
+          'Trace Local WebSocket proxy only accepts local clients by default.',
+        );
+    }
+    await server.forAnyWebSocket().thenPassThrough({
+      additionalTrustedCAs: trustedCAs,
     });
   }
 

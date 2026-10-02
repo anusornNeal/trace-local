@@ -11,6 +11,7 @@ import type {
   DaemonStatus,
   UpdateMapRuleInput,
 } from '../core/types';
+import { buildHar } from '../export/har';
 import { MapRuleStore } from '../map-local/rule-store';
 import { InterceptProxy } from '../proxy/intercept-proxy';
 import {
@@ -100,6 +101,7 @@ export class TraceLocalDaemon {
   private controlServer?: http.Server;
   private controlPort = 0;
   private caMetadata?: CertificateAuthorityMetadata;
+  private readonly eventClients = new Set<http.ServerResponse>();
 
   constructor(private readonly options: TraceLocalDaemonOptions = {}) {
     this.dataDir = options.dataDir ?? defaultTraceLocalDataDir();
@@ -107,6 +109,7 @@ export class TraceLocalDaemon {
     this.rules = new MapRuleStore();
     this.caManager = new CertificateAuthorityManager(this.dataDir);
     this.ruleState = new RuleStateRepository(this.dataDir);
+    this.store.subscribe((event) => this.broadcastEvent(event.type, event));
   }
 
   get status(): DaemonStatus {
@@ -195,6 +198,11 @@ export class TraceLocalDaemon {
     this.controlServer = undefined;
     this.proxy = undefined;
 
+    for (const client of this.eventClients) {
+      client.end();
+    }
+    this.eventClients.clear();
+
     if (controlServer) {
       await new Promise<void>((resolve, reject) => {
         controlServer.close((error) => (error ? reject(error) : resolve()));
@@ -216,6 +224,7 @@ export class TraceLocalDaemon {
       const result = mutate();
       await this.ruleState.save(this.rules.list());
       await this.refreshProxyRules();
+      this.broadcastEvent('rules-changed', { rules: this.rules.list() });
       return result;
     } catch (error) {
       this.rules.hydrate(before);
@@ -223,6 +232,55 @@ export class TraceLocalDaemon {
       await this.refreshProxyRules().catch(() => undefined);
       throw error;
     }
+  }
+
+  private sendEvent(
+    response: http.ServerResponse,
+    type: string,
+    data: unknown,
+  ): void {
+    response.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+  }
+
+  private broadcastEvent(type: string, data: unknown): void {
+    for (const response of [...this.eventClients]) {
+      try {
+        this.sendEvent(response, type, data);
+      } catch {
+        this.eventClients.delete(response);
+      }
+    }
+  }
+
+  private openEventStream(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+  ): void {
+    response.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    response.write('retry: 1000\n\n');
+
+    this.eventClients.add(response);
+    this.sendEvent(response, 'status', this.status);
+
+    const heartbeat = setInterval(() => {
+      if (!response.destroyed && !response.writableEnded) {
+        response.write(': heartbeat\n\n');
+      }
+    }, 15_000);
+    heartbeat.unref();
+
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      this.eventClients.delete(response);
+    };
+
+    request.once('close', cleanup);
+    response.once('close', cleanup);
   }
 
   private async handleControlRequest(
@@ -234,6 +292,18 @@ export class TraceLocalDaemon {
 
     if (method === 'GET' && (url.pathname === '/health' || url.pathname === '/api/status')) {
       sendJson(response, 200, this.status);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/api/events') {
+      this.openEventStream(request, response);
+      return;
+    }
+
+    if (method === 'GET' && url.pathname === '/api/export/har') {
+      const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '500', 10);
+      const limit = Number.isFinite(rawLimit) ? Math.max(0, rawLimit) : 500;
+      sendJson(response, 200, buildHar(this.store.records(limit)));
       return;
     }
 

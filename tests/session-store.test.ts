@@ -44,3 +44,30 @@ test('SessionStore replaces duplicate ids and clears all sessions', () => {
   assert.equal(store.clear(), 1);
   assert.equal(store.size, 0);
 });
+
+
+test('SessionStore emits add and clear events without exposing mutable records', () => {
+  const store = new SessionStore(2);
+  const events: unknown[] = [];
+  const unsubscribe = store.subscribe((event) => events.push(event));
+
+  const source = record('event', 10);
+  store.add(source);
+  source.path = '/mutated-after-add';
+
+  assert.equal(store.get('event')?.path, '/event');
+  assert.deepEqual(
+    events.map((event) => (event as { type: string }).type),
+    ['session-added'],
+  );
+
+  assert.equal(store.clear(), 1);
+  assert.deepEqual(
+    events.map((event) => (event as { type: string }).type),
+    ['session-added', 'sessions-cleared'],
+  );
+
+  unsubscribe();
+  store.add(record('after-unsubscribe', 20));
+  assert.equal(events.length, 2);
+});

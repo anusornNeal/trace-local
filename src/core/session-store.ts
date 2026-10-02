@@ -1,5 +1,11 @@
 import type { SessionRecord, SessionSummary } from './types';
 
+export type SessionStoreEvent =
+  | { type: 'session-added'; session: SessionSummary }
+  | { type: 'sessions-cleared'; removed: number };
+
+export type SessionStoreListener = (event: SessionStoreEvent) => void;
+
 function toSummary(record: SessionRecord): SessionSummary {
   return {
     id: record.id,
@@ -19,8 +25,17 @@ function toSummary(record: SessionRecord): SessionSummary {
   };
 }
 
+function cloneRecord(record: SessionRecord): SessionRecord {
+  return {
+    ...record,
+    requestHeaders: { ...record.requestHeaders },
+    responseHeaders: record.responseHeaders ? { ...record.responseHeaders } : undefined,
+  };
+}
+
 export class SessionStore {
-  private readonly records: SessionRecord[] = [];
+  private readonly recordsState: SessionRecord[] = [];
+  private readonly listeners = new Set<SessionStoreListener>();
 
   constructor(private readonly maxSessions = 500) {
     if (!Number.isInteger(maxSessions) || maxSessions < 1) {
@@ -29,34 +44,60 @@ export class SessionStore {
   }
 
   get size(): number {
-    return this.records.length;
+    return this.recordsState.length;
+  }
+
+  subscribe(listener: SessionStoreListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   add(record: SessionRecord): void {
-    const existingIndex = this.records.findIndex((item) => item.id === record.id);
+    const existingIndex = this.recordsState.findIndex((item) => item.id === record.id);
     if (existingIndex >= 0) {
-      this.records.splice(existingIndex, 1);
+      this.recordsState.splice(existingIndex, 1);
     }
 
-    this.records.unshift(record);
+    this.recordsState.unshift(cloneRecord(record));
 
-    if (this.records.length > this.maxSessions) {
-      this.records.length = this.maxSessions;
+    if (this.recordsState.length > this.maxSessions) {
+      this.recordsState.length = this.maxSessions;
     }
+
+    this.emit({ type: 'session-added', session: toSummary(record) });
   }
 
   get(id: string): SessionRecord | undefined {
-    return this.records.find((record) => record.id === id);
+    const record = this.recordsState.find((item) => item.id === id);
+    return record ? cloneRecord(record) : undefined;
   }
 
   list(limit = this.maxSessions): SessionSummary[] {
     const normalizedLimit = Math.max(0, Math.min(this.maxSessions, Math.floor(limit)));
-    return this.records.slice(0, normalizedLimit).map(toSummary);
+    return this.recordsState.slice(0, normalizedLimit).map(toSummary);
+  }
+
+  records(limit = this.maxSessions): SessionRecord[] {
+    const normalizedLimit = Math.max(0, Math.min(this.maxSessions, Math.floor(limit)));
+    return this.recordsState.slice(0, normalizedLimit).map(cloneRecord);
   }
 
   clear(): number {
-    const removed = this.records.length;
-    this.records.length = 0;
+    const removed = this.recordsState.length;
+    this.recordsState.length = 0;
+    if (removed > 0) {
+      this.emit({ type: 'sessions-cleared', removed });
+    }
     return removed;
+  }
+
+  private emit(event: SessionStoreEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Observers must not be able to break capture storage.
+      }
+    }
   }
 }
