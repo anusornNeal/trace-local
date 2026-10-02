@@ -98,6 +98,7 @@
         </div>
 
         <form id="ruleForm" class="rule-form" hidden>
+          <div class="rule-editor-heading"><strong id="ruleFormTitle">New rule</strong><span id="ruleIdentity" class="cell-muted"></span></div>
           <div class="form-grid">
             <label>Match
               <select id="ruleTarget"><option value="url">Full URL</option><option value="host">Host</option><option value="path">Path</option></select>
@@ -123,7 +124,7 @@
           </label>
           <div class="form-actions">
             <button id="cancelRule" type="button" class="button ghost">Cancel</button>
-            <button type="submit" class="button primary">Add rule</button>
+            <button id="saveRule" type="submit" class="button primary">Add rule</button>
           </div>
           <p id="ruleFormError" class="form-error" hidden></p>
         </form>

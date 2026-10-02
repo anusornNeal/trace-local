@@ -17,6 +17,7 @@
     pairingExpiryTimer: null,
     collapsedHosts: new Set(),
     contextSessionId: null,
+    editingRuleId: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -208,6 +209,7 @@
 
     const mapTab = $('.tab[data-tab="map"]');
     mapTab?.click();
+    resetRuleEditor();
     const form = $('#ruleForm');
     form.reset();
     $('#ruleTarget').value = 'url';
@@ -356,7 +358,7 @@
     $('#ruleCount').textContent = String(state.rules.length);
     $('#rulesEmpty').classList.toggle('visible', state.rules.length === 0);
     $('#ruleList').innerHTML = state.rules.map((rule) =>
-      '<div class="rule-row" data-rule="' + escapeHtml(rule.id) + '">' +
+      '<div class="rule-row ' + (state.editingRuleId === rule.id ? 'selected' : '') + '" data-rule="' + escapeHtml(rule.id) + '" tabindex="0" role="button" aria-label="Edit Map Local rule">' +
         '<button class="switch ' + (rule.enabled ? 'on' : '') + '" data-toggle aria-label="' + (rule.enabled ? 'Disable' : 'Enable') + ' rule"></button>' +
         '<span class="method">' + escapeHtml(rule.method) + '</span>' +
         '<span class="rule-main"><strong>' + escapeHtml(rule.target.toUpperCase() + ' · ' + rule.pattern) + '</strong><span>' + escapeHtml(rule.contentType || 'Auto content type') + '</span></span>' +
@@ -366,10 +368,56 @@
       '</div>'
     ).join('');
 
-    $$('#ruleList [data-rule]').forEach((row) => {
-      row.querySelector('[data-toggle]').addEventListener('click', () => toggleRule(row.dataset.rule));
-      row.querySelector('[data-delete]').addEventListener('click', () => deleteRule(row.dataset.rule));
+    $('#ruleList [data-rule]').forEach((row) => {
+      row.querySelector('[data-toggle]').addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleRule(row.dataset.rule);
+      });
+      row.querySelector('[data-delete]').addEventListener('click', (event) => {
+        event.stopPropagation();
+        deleteRule(row.dataset.rule);
+      });
+      row.addEventListener('click', () => openRuleEditor(row.dataset.rule));
+      row.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openRuleEditor(row.dataset.rule);
+        }
+      });
     });
+  }
+
+  function resetRuleEditor() {
+    state.editingRuleId = null;
+    $('#ruleForm').reset();
+    $('#ruleEnabled').checked = true;
+    $('#ruleMethod').value = '*';
+    $('#ruleStatus').value = '200';
+    $('#ruleFormTitle').textContent = 'New rule';
+    $('#ruleIdentity').textContent = '';
+    $('#saveRule').textContent = 'Add rule';
+    $('#ruleFormError').hidden = true;
+    renderRules();
+  }
+
+  function openRuleEditor(id) {
+    const rule = state.rules.find((item) => item.id === id);
+    if (!rule) return;
+    state.editingRuleId = id;
+    $('#ruleEnabled').checked = rule.enabled;
+    $('#ruleTarget').value = rule.target;
+    $('#rulePattern').value = rule.pattern;
+    $('#ruleMethod').value = rule.method;
+    $('#ruleStatus').value = String(rule.statusCode);
+    $('#ruleFile').value = rule.filePath;
+    $('#ruleContentType').value = rule.contentType || '';
+    $('#ruleFormTitle').textContent = 'Edit rule';
+    $('#ruleIdentity').textContent = rule.id + ' · order ' + rule.order + (rule.updatedAt ? ' · updated ' + new Date(rule.updatedAt).toLocaleString() : '');
+    $('#saveRule').textContent = 'Save changes';
+    $('#ruleFormError').hidden = true;
+    $('#ruleForm').hidden = false;
+    renderRules();
+    $('#rulePattern').focus();
   }
 
   async function toggleRule(id) {
@@ -534,10 +582,14 @@
     $('#copyCurl').addEventListener('click', () => state.selected && copyText(curlFor(state.selected)));
 
     $('#openRuleForm').addEventListener('click', () => {
+      resetRuleEditor();
       $('#ruleForm').hidden = false;
       $('#rulePattern').focus();
     });
-    $('#cancelRule').addEventListener('click', () => { $('#ruleForm').hidden = true; $('#ruleForm').reset(); $('#ruleMethod').value = '*'; $('#ruleStatus').value = '200'; });
+    $('#cancelRule').addEventListener('click', () => {
+      resetRuleEditor();
+      $('#ruleForm').hidden = true;
+    });
 
     $('#browseFile').addEventListener('click', async () => {
       if (!window.traceLocalDesktop?.chooseFile) {
@@ -553,22 +605,30 @@
       const errorElement = $('#ruleFormError');
       errorElement.hidden = true;
       try {
-        await api('/api/rules', {
-          method: 'POST',
-          body: JSON.stringify({
-            target: $('#ruleTarget').value,
-            pattern: $('#rulePattern').value,
-            method: $('#ruleMethod').value || '*',
-            filePath: $('#ruleFile').value,
-            statusCode: Number($('#ruleStatus').value || 200),
-            contentType: $('#ruleContentType').value || undefined,
-          }),
+        const editingId = state.editingRuleId;
+        const payload = {
+          enabled: $('#ruleEnabled').checked,
+          target: $('#ruleTarget').value,
+          pattern: $('#rulePattern').value,
+          method: $('#ruleMethod').value || '*',
+          filePath: $('#ruleFile').value,
+          statusCode: Number($('#ruleStatus').value || 200),
+          contentType: $('#ruleContentType').value || (editingId ? null : undefined),
+        };
+        const saved = await api(editingId ? '/api/rules/' + encodeURIComponent(editingId) : '/api/rules', {
+          method: editingId ? 'PATCH' : 'POST',
+          body: JSON.stringify(payload),
         });
-        $('#ruleForm').reset();
-        $('#ruleMethod').value = '*';
-        $('#ruleStatus').value = '200';
+        if (editingId) {
+          state.rules = state.rules.map((rule) => rule.id === editingId ? saved : rule);
+        } else if (saved && !state.rules.some((rule) => rule.id === saved.id)) {
+          state.rules = [...state.rules, saved].sort((a, b) => a.order - b.order);
+        }
+        const message = editingId ? 'Rule updated' : 'Rule added';
+        resetRuleEditor();
         $('#ruleForm').hidden = true;
-        toast('Rule added');
+        renderRules();
+        toast(message);
       } catch (error) {
         errorElement.textContent = error.message;
         errorElement.hidden = false;
