@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { TraceLocalDaemon } from './daemon/server';
 
@@ -167,6 +168,41 @@ async function main(): Promise<void> {
     .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
     .action(async (options) => {
       const result = await requestJson(options.controlUrl, '/api/rules');
+      console.log(JSON.stringify(result, null, 2));
+    });
+
+  map
+    .command('export')
+    .argument('[file]', 'optional destination JSON file')
+    .description('Export versioned Map Local rule state')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .action(async (file, options) => {
+      const result = await requestJson(options.controlUrl, '/api/rules/export');
+      const output = `${JSON.stringify(result, null, 2)}\n`;
+
+      if (file) {
+        const destination = path.resolve(file);
+        await writeFile(destination, output, 'utf8');
+        console.log(destination);
+      } else {
+        process.stdout.write(output);
+      }
+    });
+
+  map
+    .command('import')
+    .argument('<file>', 'versioned Map Local rule state JSON')
+    .description('Replace Map Local rules from an exported state file')
+    .requiredOption('--replace', 'confirm replacing the current rule set')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .action(async (file, options) => {
+      const source = path.resolve(file);
+      const document = JSON.parse(await readFile(source, 'utf8'));
+      const result = await requestJson(
+        options.controlUrl,
+        '/api/rules/import',
+        jsonRequest('POST', document),
+      );
       console.log(JSON.stringify(result, null, 2));
     });
 

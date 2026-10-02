@@ -12,9 +12,7 @@ const MAP_TARGETS = new Set<MapTarget>(['url', 'host', 'path']);
 
 function normalizeMethod(method: string | undefined): string {
   const normalized = (method ?? '*').trim().toUpperCase();
-  if (!normalized) {
-    throw new Error('method must not be empty');
-  }
+  if (!normalized) throw new Error('method must not be empty');
   return normalized;
 }
 
@@ -28,25 +26,19 @@ function normalizeStatusCode(statusCode: number | undefined): number {
 
 function normalizeTarget(target: MapTarget | undefined): MapTarget {
   const value = target ?? 'url';
-  if (!MAP_TARGETS.has(value)) {
-    throw new Error('target must be url, host, or path');
-  }
+  if (!MAP_TARGETS.has(value)) throw new Error('target must be url, host, or path');
   return value;
 }
 
 function normalizePattern(pattern: string | undefined): string {
   const value = pattern?.trim();
-  if (!value) {
-    throw new Error('pattern must not be empty');
-  }
+  if (!value) throw new Error('pattern must not be empty');
   return value;
 }
 
 function normalizeFilePath(filePath: string | undefined): string {
   const value = filePath?.trim();
-  if (!value) {
-    throw new Error('filePath must not be empty');
-  }
+  if (!value) throw new Error('filePath must not be empty');
   return path.resolve(value);
 }
 
@@ -89,16 +81,13 @@ export class MapRuleStore {
       createdAt: now,
       updatedAt: now,
     };
-
     this.rules.push(rule);
     return { ...rule };
   }
 
   update(id: string, input: UpdateMapRuleInput): MapRule | undefined {
     const index = this.rules.findIndex((item) => item.id === id);
-    if (index < 0) {
-      return undefined;
-    }
+    if (index < 0) return undefined;
 
     const current = this.rules[index];
     const next: MapRule = {
@@ -125,9 +114,7 @@ export class MapRuleStore {
 
   delete(id: string): boolean {
     const index = this.rules.findIndex((item) => item.id === id);
-    if (index < 0) {
-      return false;
-    }
+    if (index < 0) return false;
     this.rules.splice(index, 1);
     return true;
   }
@@ -135,6 +122,16 @@ export class MapRuleStore {
   findMatch(request: MatchableRequest): MapRule | undefined {
     const rule = this.rules.find((item) => matchesMapRule(item, request));
     return rule ? { ...rule } : undefined;
+  }
+
+  hydrate(rules: MapRule[]): MapRule[] {
+    this.rules.length = 0;
+    for (const rule of [...rules].sort((a, b) => a.order - b.order)) {
+      this.rules.push({ ...rule });
+    }
+    this.nextOrder =
+      this.rules.reduce((highest, rule) => Math.max(highest, rule.order), 0) + 1;
+    return this.list();
   }
 
   replaceAll(inputs: CreateMapRuleInput[]): MapRule[] {

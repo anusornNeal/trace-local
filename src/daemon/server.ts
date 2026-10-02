@@ -2,6 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
   CertificateAuthorityManager,
+  defaultTraceLocalDataDir,
   type CertificateAuthorityMetadata,
 } from '../certificates/ca-manager';
 import { SessionStore } from '../core/session-store';
@@ -12,9 +13,13 @@ import type {
 } from '../core/types';
 import { MapRuleStore } from '../map-local/rule-store';
 import { InterceptProxy } from '../proxy/intercept-proxy';
+import {
+  parseRuleStateDocument,
+  RuleStateRepository,
+} from '../state/rule-state';
 
 const VERSION = '0.1.0';
-const MAX_CONTROL_BODY_BYTES = 64 * 1024;
+const MAX_CONTROL_BODY_BYTES = 1024 * 1024;
 
 export interface TraceLocalDaemonOptions {
   controlHost?: string;
@@ -28,9 +33,7 @@ export interface TraceLocalDaemonOptions {
 }
 
 function parseNonNegativeInt(value: string | undefined, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
+  if (value === undefined) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
 }
@@ -70,9 +73,7 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
     chunks.push(chunk);
   }
 
-  if (totalBytes === 0) {
-    return {};
-  }
+  if (totalBytes === 0) return {};
 
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -92,6 +93,8 @@ export class TraceLocalDaemon {
   readonly store: SessionStore;
   readonly rules: MapRuleStore;
   readonly caManager: CertificateAuthorityManager;
+  readonly ruleState: RuleStateRepository;
+  readonly dataDir: string;
   proxy?: InterceptProxy;
 
   private controlServer?: http.Server;
@@ -99,9 +102,11 @@ export class TraceLocalDaemon {
   private caMetadata?: CertificateAuthorityMetadata;
 
   constructor(private readonly options: TraceLocalDaemonOptions = {}) {
+    this.dataDir = options.dataDir ?? defaultTraceLocalDataDir();
     this.store = new SessionStore(options.maxSessions ?? 500);
     this.rules = new MapRuleStore();
-    this.caManager = new CertificateAuthorityManager(options.dataDir);
+    this.caManager = new CertificateAuthorityManager(this.dataDir);
+    this.ruleState = new RuleStateRepository(this.dataDir);
   }
 
   get status(): DaemonStatus {
@@ -120,9 +125,9 @@ export class TraceLocalDaemon {
   }
 
   async start(): Promise<DaemonStatus> {
-    if (this.controlServer && this.proxy) {
-      return this.status;
-    }
+    if (this.controlServer && this.proxy) return this.status;
+
+    this.rules.hydrate(await this.ruleState.load());
 
     const ca = await this.caManager.ensure();
     this.caMetadata = {
@@ -196,14 +201,28 @@ export class TraceLocalDaemon {
       });
     }
 
-    if (proxy) {
-      await proxy.stop();
-    }
+    if (proxy) await proxy.stop();
     this.controlPort = 0;
   }
 
   private async refreshProxyRules(): Promise<void> {
     await this.proxy?.refreshRules();
+  }
+
+  private async persistRuleMutation<T>(mutate: () => T): Promise<T> {
+    const before = this.rules.list();
+
+    try {
+      const result = mutate();
+      await this.ruleState.save(this.rules.list());
+      await this.refreshProxyRules();
+      return result;
+    } catch (error) {
+      this.rules.hydrate(before);
+      await this.ruleState.save(before).catch(() => undefined);
+      await this.refreshProxyRules().catch(() => undefined);
+      throw error;
+    }
   }
 
   private async handleControlRequest(
@@ -234,16 +253,12 @@ export class TraceLocalDaemon {
     if (url.pathname === '/api/sessions' && method === 'GET') {
       const rawLimit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
       const limit = Number.isFinite(rawLimit) ? Math.max(0, rawLimit) : 100;
-      sendJson(response, 200, {
-        sessions: this.store.list(limit),
-        total: this.store.size,
-      });
+      sendJson(response, 200, { sessions: this.store.list(limit), total: this.store.size });
       return;
     }
 
     if (url.pathname === '/api/sessions' && method === 'DELETE') {
-      const removed = this.store.clear();
-      sendJson(response, 200, { removed });
+      sendJson(response, 200, { removed: this.store.clear() });
       return;
     }
 
@@ -258,6 +273,25 @@ export class TraceLocalDaemon {
       return;
     }
 
+    if (url.pathname === '/api/rules/export' && method === 'GET') {
+      sendJson(response, 200, this.ruleState.document(this.rules.list()));
+      return;
+    }
+
+    if (url.pathname === '/api/rules/import' && method === 'POST') {
+      try {
+        const document = parseRuleStateDocument(await readJsonBody(request));
+        const rules = await this.persistRuleMutation(() => this.rules.hydrate(document.rules));
+        sendJson(response, 200, { imported: rules.length, rules });
+      } catch (error) {
+        sendJson(response, 400, {
+          error: 'invalid_rule_state',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
     if (url.pathname === '/api/rules' && method === 'GET') {
       sendJson(response, 200, { rules: this.rules.list() });
       return;
@@ -266,8 +300,7 @@ export class TraceLocalDaemon {
     if (url.pathname === '/api/rules' && method === 'POST') {
       try {
         const input = asObject(await readJsonBody(request)) as unknown as CreateMapRuleInput;
-        const rule = this.rules.create(input);
-        await this.refreshProxyRules();
+        const rule = await this.persistRuleMutation(() => this.rules.create(input));
         sendJson(response, 201, rule);
       } catch (error) {
         sendJson(response, 400, {
@@ -284,12 +317,11 @@ export class TraceLocalDaemon {
       if (method === 'PATCH') {
         try {
           const input = asObject(await readJsonBody(request)) as unknown as UpdateMapRuleInput;
-          const rule = this.rules.update(id, input);
-          if (!rule) {
+          if (!this.rules.get(id)) {
             sendJson(response, 404, { error: 'rule_not_found', id });
             return;
           }
-          await this.refreshProxyRules();
+          const rule = await this.persistRuleMutation(() => this.rules.update(id, input)!);
           sendJson(response, 200, rule);
         } catch (error) {
           sendJson(response, 400, {
@@ -301,11 +333,11 @@ export class TraceLocalDaemon {
       }
 
       if (method === 'DELETE') {
-        if (!this.rules.delete(id)) {
+        if (!this.rules.get(id)) {
           sendJson(response, 404, { error: 'rule_not_found', id });
           return;
         }
-        await this.refreshProxyRules();
+        await this.persistRuleMutation(() => this.rules.delete(id));
         sendJson(response, 200, { deleted: true, id });
         return;
       }
@@ -331,7 +363,7 @@ async function runStandalone(): Promise<void> {
 
   const status = await daemon.start();
   process.stdout.write(
-    `Trace Local daemon running\nControl: http://127.0.0.1:${status.controlPort}\nProxy: ${status.proxy.proxyUrl}\nCA: ${status.proxy.caCertPath}\n`,
+    `Trace Local daemon running\nControl: http://127.0.0.1:${status.controlPort}\nProxy: ${status.proxy.proxyUrl}\nCA: ${status.proxy.caCertPath}\nState: ${daemon.ruleState.filePath}\n`,
   );
 
   const shutdown = async () => {

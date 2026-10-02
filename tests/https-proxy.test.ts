@@ -130,16 +130,21 @@ test('Trace Local intercepts HTTPS, captures it, and Map Local bypasses HTTPS up
     additionalTrustedCaCerts: [upstreamCa.cert],
   });
 
-  daemon.rules.create({
-    target: 'path',
-    pattern: '/mapped',
-    method: 'GET',
-    filePath: mappedFile,
-  });
-
   try {
     const status = await daemon.start();
     const traceCa = await daemon.caManager.ensure();
+    const controlBase = `http://127.0.0.1:${status.controlPort}`;
+    const createRule = await fetch(`${controlBase}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        target: 'path',
+        pattern: '/mapped',
+        method: 'GET',
+        filePath: mappedFile,
+      }),
+    });
+    assert.equal(createRule.status, 201);
 
     const passthrough = await httpsThroughProxy({
       proxyPort: status.proxy.port,

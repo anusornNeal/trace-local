@@ -226,3 +226,94 @@ test('daemon exposes Map Local rule CRUD API', async () => {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+
+test('daemon persists Map Local rules across restart and supports export/import', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-persist-'));
+  const dataDir = path.join(tempDir, 'data');
+  const mappedPath = path.join(tempDir, 'persisted.txt');
+  await writeFile(mappedPath, 'persisted-response');
+
+  let firstId = '';
+  let exported: unknown;
+
+  const first = new TraceLocalDaemon({
+    controlHost: '127.0.0.1',
+    controlPort: 0,
+    proxyPort: 0,
+    dataDir,
+  });
+
+  try {
+    const status = await first.start();
+    const base = `http://127.0.0.1:${status.controlPort}`;
+    const create = await fetch(`${base}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        target: 'path',
+        pattern: '/persist/*',
+        method: 'GET',
+        filePath: mappedPath,
+        enabled: true,
+      }),
+    });
+    assert.equal(create.status, 201);
+    const created = (await create.json()) as { id: string; order: number };
+    firstId = created.id;
+    assert.equal(created.order, 1);
+
+    exported = await (await fetch(`${base}/api/rules/export`)).json();
+  } finally {
+    await first.stop();
+  }
+
+  const second = new TraceLocalDaemon({
+    controlHost: '127.0.0.1',
+    controlPort: 0,
+    proxyPort: 0,
+    dataDir,
+  });
+
+  try {
+    const status = await second.start();
+    const base = `http://127.0.0.1:${status.controlPort}`;
+    const rules = (await (await fetch(`${base}/api/rules`)).json()) as {
+      rules: Array<{ id: string; order: number; enabled: boolean }>;
+    };
+
+    assert.deepEqual(
+      rules.rules.map((rule) => ({ id: rule.id, order: rule.order, enabled: rule.enabled })),
+      [{ id: firstId, order: 1, enabled: true }],
+    );
+
+    const mapped = await proxyRequest(
+      status.proxy.port,
+      'http://unreachable.invalid/persist/value',
+    );
+    assert.equal(mapped.statusCode, 200);
+    assert.equal(mapped.body, 'persisted-response');
+
+    const deleteResponse = await fetch(`${base}/api/rules/${firstId}`, {
+      method: 'DELETE',
+    });
+    assert.equal(deleteResponse.status, 200);
+
+    const importResponse = await fetch(`${base}/api/rules/import`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(exported),
+    });
+    assert.equal(importResponse.status, 200);
+
+    const imported = (await importResponse.json()) as {
+      imported: number;
+      rules: Array<{ id: string }>;
+    };
+    assert.equal(imported.imported, 1);
+    assert.equal(imported.rules[0]?.id, firstId);
+  } finally {
+    await second.stop();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
