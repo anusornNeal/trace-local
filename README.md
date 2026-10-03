@@ -18,7 +18,46 @@ npm run dev:daemon
 npm run dev:cli -- --help
 ```
 
-## Configure a client
+## Mobile companions
+
+For Android and iPhone, the intended product flow is:
+
+1. Open **Settings → Mobile companions** in Trace Local desktop.
+2. Click **Pair mobile device** and scan the short-lived QR in the companion app.
+3. On first use, install/trust the Trace Local CA using the OS flow and approve the VPN configuration.
+4. Tap **Connect**. Returning devices using the same trusted CA normally scan a fresh QR and connect without editing Wi-Fi proxy settings.
+5. Disconnect from the companion, desktop UI, or CLI. If the desktop disappears, the companion removes its VPN/proxy configuration after the bounded stale timeout so normal routing is restored.
+
+Normal mobile use does not require editing Wi-Fi proxy settings.
+
+The QR is single-use and carries only a short-lived LAN pairing reference. The CA private key never leaves the desktop.
+
+Android uses the platform VPN HTTP proxy for proxy-aware HTTP/HTTPS traffic. iOS configures HTTP/HTTPS proxy settings inside its Network Extension without installing a default packet route. Apps that deliberately bypass the platform proxy are outside the current transparent-interception scope.
+
+### Mobile release-candidate validation
+
+Run the checks supported on the current machine:
+
+```bash
+npm run verify:mobile
+```
+
+A release candidate is not considered physically validated until the platform matrix is executed on real hardware:
+
+| Scenario | Windows automation | Physical Android | macOS + physical iPhone |
+| --- | --- | --- | --- |
+| Pairing contract / expiry / multi-device lifecycle | Automated | Confirm | Confirm |
+| First-use CA + VPN flow | Source/build checks | Required | Required |
+| Returning-user QR connect | Contract checks | Required | Required |
+| Desktop GUI / CLI disconnect | Automated server/CLI | Required | Required |
+| Graceful shutdown / desktop loss cleanup | Automated server lifecycle | Required | Required |
+| Sleep/wake, Wi-Fi/LAN/IP change | Not simulated | Required | Required |
+| HTTPS capture for target apps | Proxy regression tests | Required | Required |
+| iOS Xcode compile, signing, entitlement | Not available on Windows | — | Required |
+
+The matrix intentionally distinguishes implementation checks from hardware/signing verification; unavailable platform checks are never reported as passed.
+
+## Advanced/manual client configuration
 
 1. Open **Settings** and copy the proxy address.
 2. Configure the development browser, emulator, device, or app you control to use that HTTP/HTTPS proxy.
