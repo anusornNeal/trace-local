@@ -21,6 +21,7 @@
     "package:smoke": "node scripts/package-smoke.mjs",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
     "e2e:desktop": "npm run build && node scripts/desktop-e2e.mjs",
+    "verify:mobile": "node scripts/mobile-release-check.mjs",
     "stress": "npm run build && node --expose-gc scripts/stress.mjs"
   },
   "keywords": [

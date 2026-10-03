@@ -412,14 +412,23 @@ public final class MainActivity extends Activity {
         statusText.setText(status == null ? "" : status);
         detailText.setText(detail == null ? "" : detail);
     }
-
     private static String prettyState(String state) {
         if (state == null || state.trim().isEmpty()) {
-            return "Trace Local";
+            return "Needs attention";
         }
-        return Character.toUpperCase(state.charAt(0)) + state.substring(1);
+        switch (state) {
+            case "connected":
+                return "Connected";
+            case "reconnecting":
+                return "Connecting";
+            case "disconnected":
+                return "Ready to connect";
+            case "error":
+                return "Needs attention";
+            default:
+                return Character.toUpperCase(state.charAt(0)) + state.substring(1);
+        }
     }
-
     private static String message(Throwable error) {
         String message = error.getMessage();
         return message == null || message.trim().isEmpty() ? error.getClass().getSimpleName() : message;

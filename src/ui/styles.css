@@ -229,3 +229,11 @@ pre {
 .device-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
 .device-row strong { display: block; font-size: 12px; }
 .device-row span { color: var(--muted); font-size: 11px; }
+
+.mobile-flow-copy { margin: 6px 0 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.advanced-mobile-setup { margin: 10px 0 14px; padding: 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); }
+.advanced-mobile-setup summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 600; }
+.advanced-mobile-setup p { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.manual-link-row { display: grid; gap: 8px; margin: 10px 0; }
+.manual-link-row code { overflow-wrap: anywhere; white-space: normal; }
+.button:disabled { cursor: not-allowed; opacity: .45; }
