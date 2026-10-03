@@ -1,0 +1,458 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* TraceLocalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000001 /* TraceLocalApp.swift */; };
+		A10000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* ContentView.swift */; };
+		A10000000000000000000003 /* PairingContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000003 /* PairingContract.swift */; };
+		A10000000000000000000004 /* PairingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000004 /* PairingClient.swift */; };
+		A10000000000000000000005 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000005 /* DeviceIdentity.swift */; };
+		A10000000000000000000006 /* TunnelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000006 /* TunnelController.swift */; };
+		A10000000000000000000007 /* CompanionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000007 /* CompanionStore.swift */; };
+		A10000000000000000000008 /* ScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000008 /* ScannerView.swift */; };
+		A10000000000000000000009 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000009 /* PacketTunnelProvider.swift */; };
+		A1000000000000000000000A /* PairingContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000A /* PairingContractTests.swift */; };
+		A1000000000000000000000B /* TraceLocalExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = F1000000000000000000000C /* TraceLocalExtension.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		E10000000000000000000001 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = P10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = T10000000000000000000002;
+			remoteInfo = TraceLocalExtension;
+		};
+		E10000000000000000000002 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = P10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = T10000000000000000000001;
+			remoteInfo = TraceLocal;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B10000000000000000000004 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A1000000000000000000000B /* TraceLocalExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		F10000000000000000000001 /* TraceLocalApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceLocalApp.swift; sourceTree = "<group>"; };
+		F10000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F10000000000000000000003 /* PairingContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingContract.swift; sourceTree = "<group>"; };
+		F10000000000000000000004 /* PairingClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingClient.swift; sourceTree = "<group>"; };
+		F10000000000000000000005 /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
+		F10000000000000000000006 /* TunnelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelController.swift; sourceTree = "<group>"; };
+		F10000000000000000000007 /* CompanionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionStore.swift; sourceTree = "<group>"; };
+		F10000000000000000000008 /* ScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerView.swift; sourceTree = "<group>"; };
+		F10000000000000000000009 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
+		F1000000000000000000000A /* PairingContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingContractTests.swift; sourceTree = "<group>"; };
+		F1000000000000000000000B /* TraceLocal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TraceLocal.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1000000000000000000000C /* TraceLocalExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TraceLocalExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1000000000000000000000D /* TraceLocalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TraceLocalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1000000000000000000000E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F1000000000000000000000F /* TraceLocal.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TraceLocal.entitlements; sourceTree = "<group>"; };
+		F10000000000000000000010 /* Extension Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F10000000000000000000011 /* TraceLocalExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TraceLocalExtension.entitlements; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B10000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B10000000000000000000005 /* Extension Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B10000000000000000000008 /* Tests Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		G10000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				G10000000000000000000002 /* TraceLocal */,
+				G10000000000000000000005 /* TraceLocalExtension */,
+				G10000000000000000000006 /* TraceLocalTests */,
+				G10000000000000000000007 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		G10000000000000000000002 /* TraceLocal */ = {
+			isa = PBXGroup;
+			children = (
+				F10000000000000000000001 /* TraceLocalApp.swift */,
+				F10000000000000000000002 /* ContentView.swift */,
+				G10000000000000000000003 /* Core */,
+				G10000000000000000000004 /* Scanner */,
+				F1000000000000000000000E /* Info.plist */,
+				F1000000000000000000000F /* TraceLocal.entitlements */,
+			);
+			path = TraceLocal;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000003 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				F10000000000000000000003 /* PairingContract.swift */,
+				F10000000000000000000004 /* PairingClient.swift */,
+				F10000000000000000000005 /* DeviceIdentity.swift */,
+				F10000000000000000000006 /* TunnelController.swift */,
+				F10000000000000000000007 /* CompanionStore.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000004 /* Scanner */ = {
+			isa = PBXGroup;
+			children = (
+				F10000000000000000000008 /* ScannerView.swift */,
+			);
+			path = Scanner;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000005 /* TraceLocalExtension */ = {
+			isa = PBXGroup;
+			children = (
+				F10000000000000000000009 /* PacketTunnelProvider.swift */,
+				F10000000000000000000010 /* Extension Info.plist */,
+				F10000000000000000000011 /* TraceLocalExtension.entitlements */,
+			);
+			path = TraceLocalExtension;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000006 /* TraceLocalTests */ = {
+			isa = PBXGroup;
+			children = (
+				F1000000000000000000000A /* PairingContractTests.swift */,
+			);
+			path = TraceLocalTests;
+			sourceTree = "<group>";
+		};
+		G10000000000000000000007 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F1000000000000000000000B /* TraceLocal.app */,
+				F1000000000000000000000C /* TraceLocalExtension.appex */,
+				F1000000000000000000000D /* TraceLocalTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		T10000000000000000000001 /* TraceLocal */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = L10000000000000000000002 /* Build configuration list for PBXNativeTarget "TraceLocal" */;
+			buildPhases = (
+				B10000000000000000000002 /* Sources */,
+				B10000000000000000000001 /* Frameworks */,
+				B10000000000000000000003 /* Resources */,
+				B10000000000000000000004 /* Embed App Extensions */,
+			);
+			buildRules = ();
+			dependencies = (
+				E20000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = TraceLocal;
+			productName = TraceLocal;
+			productReference = F1000000000000000000000B /* TraceLocal.app */;
+			productType = "com.apple.product-type.application";
+		};
+		T10000000000000000000002 /* TraceLocalExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = L10000000000000000000003 /* Build configuration list for PBXNativeTarget "TraceLocalExtension" */;
+			buildPhases = (
+				B10000000000000000000006 /* Sources */,
+				B10000000000000000000005 /* Extension Frameworks */,
+				B10000000000000000000007 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = TraceLocalExtension;
+			productName = TraceLocalExtension;
+			productReference = F1000000000000000000000C /* TraceLocalExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		T10000000000000000000003 /* TraceLocalTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = L10000000000000000000004 /* Build configuration list for PBXNativeTarget "TraceLocalTests" */;
+			buildPhases = (
+				B10000000000000000000009 /* Sources */,
+				B10000000000000000000008 /* Tests Frameworks */,
+				B1000000000000000000000A /* Resources */,
+			);
+			buildRules = ();
+			dependencies = (
+				E20000000000000000000002 /* PBXTargetDependency */,
+			);
+			name = TraceLocalTests;
+			productName = TraceLocalTests;
+			productReference = F1000000000000000000000D /* TraceLocalTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		P10000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					T10000000000000000000001 = {CreatedOnToolsVersion = 16.0; };
+					T10000000000000000000002 = {CreatedOnToolsVersion = 16.0; };
+					T10000000000000000000003 = {CreatedOnToolsVersion = 16.0; TestTargetID = T10000000000000000000001; };
+				};
+			};
+			buildConfigurationList = L10000000000000000000001 /* Build configuration list for PBXProject "TraceLocal" */;
+			compatibilityVersion = "Xcode 15.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base,);
+			mainGroup = G10000000000000000000001;
+			productRefGroup = G10000000000000000000007 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				T10000000000000000000001 /* TraceLocal */,
+				T10000000000000000000002 /* TraceLocalExtension */,
+				T10000000000000000000003 /* TraceLocalTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B10000000000000000000003 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B10000000000000000000007 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		B1000000000000000000000A /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B10000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* TraceLocalApp.swift in Sources */,
+				A10000000000000000000002 /* ContentView.swift in Sources */,
+				A10000000000000000000003 /* PairingContract.swift in Sources */,
+				A10000000000000000000004 /* PairingClient.swift in Sources */,
+				A10000000000000000000005 /* DeviceIdentity.swift in Sources */,
+				A10000000000000000000006 /* TunnelController.swift in Sources */,
+				A10000000000000000000007 /* CompanionStore.swift in Sources */,
+				A10000000000000000000008 /* ScannerView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000009 /* PacketTunnelProvider.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000009 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000000A /* PairingContractTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		E20000000000000000000001 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = T10000000000000000000002 /* TraceLocalExtension */; targetProxy = E10000000000000000000001; };
+		E20000000000000000000002 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = T10000000000000000000001 /* TraceLocal */; targetProxy = E10000000000000000000002; };
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		D10000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		D10000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		D10000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = TraceLocal/TraceLocal.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TraceLocal/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tracelocal.companion;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D10000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = TraceLocal/TraceLocal.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TraceLocal/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tracelocal.companion;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		D10000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = TraceLocalExtension/TraceLocalExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TraceLocalExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tracelocal.companion.PacketTunnel;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D10000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = TraceLocalExtension/TraceLocalExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TraceLocalExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tracelocal.companion.PacketTunnel;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		D10000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tracelocal.companion.Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TraceLocal.app/TraceLocal";
+			};
+			name = Debug;
+		};
+		D10000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tracelocal.companion.Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TraceLocal.app/TraceLocal";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		L10000000000000000000001 /* Build configuration list for PBXProject "TraceLocal" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D10000000000000000000001 /* Debug */,
+				D10000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		L10000000000000000000002 /* Build configuration list for PBXNativeTarget "TraceLocal" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D10000000000000000000003 /* Debug */,
+				D10000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		L10000000000000000000003 /* Build configuration list for PBXNativeTarget "TraceLocalExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D10000000000000000000005 /* Debug */,
+				D10000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		L10000000000000000000004 /* Build configuration list for PBXNativeTarget "TraceLocalTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D10000000000000000000007 /* Debug */,
+				D10000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = P10000000000000000000001 /* Project object */;
+}
