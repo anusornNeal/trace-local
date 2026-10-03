@@ -166,7 +166,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', (event) => {
-  if (shuttingDown || !daemon) return;
+  if (shuttingDown) { event.preventDefault(); return; }
+  if (!daemon) return;
 
   event.preventDefault();
   shuttingDown = true;
@@ -176,5 +177,5 @@ app.on('before-quit', (event) => {
   void activeDaemon
     .stop()
     .catch((error) => console.error('Failed to stop Trace Local daemon:', error))
-    .finally(() => app.quit());
+    .finally(() => { shuttingDown = false; app.quit(); });
 });

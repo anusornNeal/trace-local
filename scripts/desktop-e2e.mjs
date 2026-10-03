@@ -40,13 +40,16 @@ function closeServer(server) {
 async function reservePorts() {
   const control = net.createServer();
   const proxy = net.createServer();
+  const debuggerServer = net.createServer();
   await listen(control, { host: '127.0.0.1', port: 0 });
   await listen(proxy, { host: '127.0.0.1', port: 0 });
+  await listen(debuggerServer, { host: '127.0.0.1', port: 0 });
 
   const controlPort = control.address().port;
   const proxyPort = proxy.address().port;
-  await Promise.all([closeServer(control), closeServer(proxy)]);
-  return { controlPort, proxyPort };
+  const debuggerPort = debuggerServer.address().port;
+  await Promise.all([closeServer(control), closeServer(proxy), closeServer(debuggerServer)]);
+  return { controlPort, proxyPort, debuggerPort };
 }
 
 function waitForReady(child, timeoutMs = 20_000) {
@@ -116,29 +119,94 @@ function waitForExit(child, timeoutMs = 10_000) {
   }
 
   return new Promise((resolve, reject) => {
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve();
+    };
     const timer = setTimeout(() => {
+      child.off('exit', onExit);
       reject(new Error('Timed out waiting for Electron to exit'));
     }, timeoutMs);
 
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolve();
-    });
+    child.once('exit', onExit);
   });
 }
 
-async function stopElectron(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+const electronModule = "process.getBuiltinModule('module').createRequire(process.cwd() + '/package.json')('electron')";
 
-  child.stdin?.write('quit\n');
-  try {
-    await waitForExit(child, 2_000);
+async function evaluateDesktop(debuggerPort, expression) {
+  const targets = await requestJson(`http://127.0.0.1:${debuggerPort}`, '/json');
+  const target = targets.find((entry) => entry.type === 'node');
+  assert.ok(target?.webSocketDebuggerUrl, 'Electron main process debugging target missing');
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(target.webSocketDebuggerUrl);
+    const timer = setTimeout(() => finish(new Error('Desktop debugger command timed out')), 8_000);
+    let sent = false;
+    let settled = false;
+    function finish(error, value) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.close();
+      if (error) reject(error);
+      else resolve(value);
+    }
+    socket.addEventListener('open', () => {
+      sent = true;
+      socket.send(JSON.stringify({
+        id: 1,
+        method: 'Runtime.evaluate',
+        params: { expression, awaitPromise: true, returnByValue: true },
+      }));
+    });
+    socket.addEventListener('message', (event) => {
+      const result = JSON.parse(event.data);
+      if (result.id === 1) {
+        const error = result.error?.message ?? result.result?.exceptionDetails?.text;
+        finish(error ? new Error(error) : undefined, result.result?.result?.value);
+      }
+    });
+    socket.addEventListener('close', () => finish(sent ? undefined : new Error('Desktop debugger closed before command')));
+    socket.addEventListener('error', () => finish(new Error('Desktop debugger connection failed')));
+  });
+}
+
+async function evaluateRenderer(debuggerPort, expression) {
+  return evaluateDesktop(debuggerPort, `${electronModule}.BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(${JSON.stringify(expression)})`);
+}
+
+async function waitForRenderer(debuggerPort, expression) {
+  const result = await evaluateRenderer(debuggerPort, `new Promise((resolve) => {
+    const deadline = Date.now() + 5000;
+    const timer = setInterval(() => {
+      if (${expression}) { clearInterval(timer); resolve({ ok: true }); }
+      else if (Date.now() >= deadline) {
+        clearInterval(timer);
+        resolve({ ok: false, toast: document.querySelector('#toast').textContent });
+      }
+    }, 50);
+  })`);
+  assert.equal(result?.ok, true, `Renderer did not reach expected state: ${JSON.stringify(result)}`);
+}
+
+async function stopElectron(child, debuggerPort) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    assert.equal(child.exitCode, 0, 'Electron exited unexpectedly');
+    assert.equal(child.signalCode, null, 'Electron was terminated by a signal');
     return;
-  } catch {
-    child.kill();
   }
 
-  await waitForExit(child, 5_000);
+  try {
+    await evaluateDesktop(debuggerPort, `${electronModule}.app.quit(); ${electronModule}.app.quit()`);
+    await waitForExit(child, 10_000);
+    assert.equal(child.exitCode, 0, 'Electron did not exit cleanly');
+    assert.equal(child.signalCode, null, 'Electron was terminated by a signal');
+    return;
+  } catch (error) {
+    child.kill();
+    await waitForExit(child, 5_000);
+    throw error;
+  }
 }
 
 function requestViaProxy(proxyPort, targetUrl) {
@@ -173,12 +241,63 @@ function requestViaProxy(proxyPort, targetUrl) {
 }
 
 async function requestJson(baseUrl, requestPath, init) {
-  const response = await fetch(new URL(requestPath, baseUrl), init);
+  const response = await fetch(new URL(requestPath, baseUrl), {
+    ...init,
+    signal: AbortSignal.timeout(5_000),
+  });
   const text = await response.text();
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}: ${text}`);
   }
   return text ? JSON.parse(text) : null;
+}
+
+async function pairDevice(controlUrl, platform) {
+  const setup = await requestJson(controlUrl, '/api/pairing/token', { method: 'POST' });
+  assert.ok(setup.qrSvg, 'Pairing must return a real QR');
+  const pairingUrl = new URL(setup.url);
+  const pairing = await requestJson(pairingUrl.origin, pairingUrl.pathname + pairingUrl.search);
+  const connected = await requestJson(pairing.apiBaseUrl, '/device/session', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      pairingId: pairing.pairingId,
+      deviceId: `desktop-e2e-${platform}`,
+      name: `Simulated ${platform} companion`,
+      platform,
+    }),
+  });
+  assert.equal(connected.restoreRoutingOnDisconnect, true);
+  assert.equal(connected.session.platform, platform);
+  assert.equal(connected.heartbeatIntervalMs, 3_000);
+  assert.equal(connected.staleAfterMs, 15_000);
+  return {
+    apiBaseUrl: pairing.apiBaseUrl,
+    sessionPath: `/device/session/${encodeURIComponent(connected.session.sessionId)}`,
+    sessionId: connected.session.sessionId,
+  };
+}
+
+async function heartbeatDevice(device) {
+  return requestJson(device.apiBaseUrl, `${device.sessionPath}/heartbeat`, { method: 'POST' });
+}
+
+async function acknowledgeDevice(device) {
+  await requestJson(device.apiBaseUrl, `${device.sessionPath}/disconnected`, { method: 'POST' });
+}
+
+async function observeShutdownDisconnect(device) {
+  const deadline = Date.now() + 8_000;
+  while (Date.now() < deadline) {
+    const heartbeat = await heartbeatDevice(device);
+    if (heartbeat.disconnectRequested) {
+      assert.equal(heartbeat.restoreRouting, true);
+      await acknowledgeDevice(device);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('Desktop shutdown did not request companion routing restoration');
 }
 
 async function waitForSession(baseUrl, predicate, timeoutMs = 5_000) {
@@ -230,13 +349,14 @@ const upstream = http.createServer((request, response) => {
 let electron;
 let proxyPort;
 let controlPort;
+let debuggerPort;
 
 try {
   await listen(upstream, { host: '127.0.0.1', port: 0 });
   const upstreamPort = upstream.address().port;
-  ({ controlPort, proxyPort } = await reservePorts());
+  ({ controlPort, proxyPort, debuggerPort } = await reservePorts());
 
-  electron = spawn(electronPath, [projectRoot], {
+  electron = spawn(electronPath, [`--inspect=127.0.0.1:${debuggerPort}`, projectRoot], {
     cwd: projectRoot,
     env: {
       ...process.env,
@@ -300,11 +420,64 @@ try {
   assert.equal(mappedSession.statusCode, 203);
   assert.equal(mappedSession.mapped, true);
 
-  await stopElectron(electron);
+  const ruleId = created.id || created.rule?.id;
+  const ruleSelector = `[data-rule="${ruleId}"]`;
+  const sessionSelector = `[data-session="${captured.id}"]`;
+  await waitForRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}) && document.querySelector(${JSON.stringify(sessionSelector)})`);
+  await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(sessionSelector)}).click()`);
+  await waitForRenderer(debuggerPort, "document.querySelector('#detailRequest').textContent.includes('x-tracelocal-e2e')");
+  await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}).querySelector('[data-toggle]').click()`);
+  await waitForRenderer(debuggerPort, `!document.querySelector(${JSON.stringify(ruleSelector)}).querySelector('[data-toggle]').classList.contains('on')`);
+  const disabledRule = (await requestJson(controlUrl, '/api/rules')).rules.find((rule) => rule.id === ruleId);
+  assert.equal(disabledRule.enabled, false, 'Renderer rule toggle did not persist');
+  await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}).querySelector('[data-toggle]').click()`);
+  await waitForRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}).querySelector('[data-toggle]').classList.contains('on')`);
+
+  const android = await pairDevice(controlUrl, 'android');
+  const ios = await pairDevice(controlUrl, 'ios');
+  assert.equal((await requestJson(controlUrl, '/api/devices')).devices.length, 2);
+  assert.equal((await heartbeatDevice(android)).disconnectRequested, false);
+  assert.equal((await heartbeatDevice(ios)).disconnectRequested, false);
+
+  const deviceSelector = `[data-device="${android.sessionId}"]`;
+  await waitForRenderer(debuggerPort, `document.querySelectorAll('#deviceList [data-device]').length === 2`);
+  await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(deviceSelector)}).querySelector('[data-device-disconnect]').click()`);
+  await waitForRenderer(debuggerPort, `document.querySelector(${JSON.stringify(deviceSelector)}).querySelector('[data-device-disconnect]').disabled`);
+  const androidDisconnect = await heartbeatDevice(android);
+  assert.equal(androidDisconnect.disconnectRequested, true);
+  assert.equal(androidDisconnect.restoreRouting, true);
+  assert.equal((await heartbeatDevice(ios)).disconnectRequested, false);
+  await acknowledgeDevice(android);
+  assert.equal((await requestJson(controlUrl, '/api/devices')).devices.length, 1);
+
+  await requestJson(controlUrl, '/api/devices', { method: 'DELETE' });
+  const iosDisconnect = await heartbeatDevice(ios);
+  assert.equal(iosDisconnect.disconnectRequested, true);
+  assert.equal(iosDisconnect.restoreRouting, true);
+  await acknowledgeDevice(ios);
+  assert.equal((await requestJson(controlUrl, '/api/devices')).devices.length, 0);
+
+  const returningAndroid = await pairDevice(controlUrl, 'android');
+  const returningIos = await pairDevice(controlUrl, 'ios');
+  assert.notEqual(returningAndroid.sessionId, android.sessionId);
+  assert.notEqual(returningIos.sessionId, ios.sessionId);
+  const mobilePort = new URL(returningAndroid.apiBaseUrl).port;
+  assert.equal(new URL(returningIos.apiBaseUrl).port, mobilePort);
+
+  const shutdownResults = await Promise.allSettled([
+    observeShutdownDisconnect(returningAndroid),
+    observeShutdownDisconnect(returningIos),
+    stopElectron(electron, debuggerPort),
+  ]);
+  for (const result of shutdownResults) {
+    if (result.status === 'rejected') throw result.reason;
+  }
   electron = undefined;
 
   await assertPortReleased(proxyPort);
   await assertPortReleased(controlPort, '127.0.0.1');
+  await assertPortReleased(Number(mobilePort));
+  await assertPortReleased(debuggerPort, '127.0.0.1');
 
   console.log(JSON.stringify({
     ok: true,
@@ -312,12 +485,23 @@ try {
     controlPort,
     capturedSessionId: captured.id,
     mappedSessionId: mappedSession.id,
+    renderer: { trafficDetail: true, ruleTogglePersisted: true, deviceDisconnect: true },
     upstreamRequests,
+    mobileLifecycle: {
+      clients: 'simulated Android/iOS API clients; no physical VPN or CA verification',
+      pairedDevices: 2,
+      singleDeviceDisconnect: true,
+      disconnectAll: true,
+      freshQrReconnect: true,
+      gracefulShutdownAcknowledged: true,
+      repeatedQuitWaitsForCleanup: true,
+      mobilePortReleased: true,
+    },
     stderr: stderr.trim() || undefined,
   }, null, 2));
 } finally {
   if (electron) {
-    await stopElectron(electron).catch(() => electron.kill());
+    await stopElectron(electron, debuggerPort).catch(() => electron.kill());
   }
   await closeServer(upstream).catch(() => undefined);
   await rm(tempRoot, { recursive: true, force: true });

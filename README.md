@@ -9,7 +9,7 @@ npm install
 npm run desktop
 ```
 
-The desktop app prefers the stable loopback proxy address `http://127.0.0.1:8888`, matching the CLI default. If port 8888 is already occupied, it falls back to a free loopback port; the address shown in the header or **Settings** is always authoritative.
+The desktop app uses proxy port 8888, matching the CLI default, and advertises its LAN address for mobile connections. If the port is occupied, startup explains the conflict; close the conflicting app or set `TRACELOCAL_PROXY_PORT` to another port. The address shown in the header or **Settings** is authoritative.
 
 For CLI-only development:
 
@@ -66,6 +66,10 @@ The matrix intentionally distinguishes implementation checks from hardware/signi
 
 Trace Local does not install trust certificates automatically and binds its control surface to loopback by default.
 
+The control and mobile listeners validate Host and browser-origin headers; body-bearing mutations require `application/json`. The proxy blocks forwarding to this daemon's control endpoint, including hostname aliases. Shutdown rejects new mutations and mobile sessions while allowing existing devices to acknowledge routing restoration.
+
+CA initialization is serialized across processes sharing the same data directory. If a process crashes while creating the CA, initialization fails with the `.ca-initialize.lock` path; remove that lock only after all Trace Local processes using that directory have stopped. An expired CA blocks new pairing with `503 ca_expired` and requires restarting Trace Local so its proxy and clients can use the regenerated identity together. Existing devices can still send heartbeats and acknowledge disconnects.
+
 ## Map Local
 
 Open **Map Local**, create a rule, choose a local response file, then match by full URL, host, or path. Rules are persisted locally and can be enabled, disabled, or removed without restarting the proxy.
@@ -82,7 +86,9 @@ npm run audit:prod
 npm run e2e:desktop
 ```
 
-`e2e:desktop` launches the real Electron entry with temporary ports, Trace Local data, and Electron user data. It sends real proxy traffic, verifies capture and Map Local behavior, then checks that the proxy/control ports are released without touching normal user state.
+`e2e:desktop` launches the real Electron entry with temporary ports, Trace Local data, and Electron user data. It sends real proxy traffic, opens request details in the renderer, toggles a Map Local rule through the UI and verifies persistence, and disconnects a paired device through its rendered button.
+
+Simulated Android/iOS API clients pair, disconnect individually and together, and reconnect with fresh pairing references. The test requests quit twice through a temporary loopback main-process debugger, requires both clients to receive and acknowledge routing-restoration requests before exit, and checks that proxy/control/mobile/debugger ports are released. Forced termination fails verification. Mobile clients are simulated; this does not verify physical CA installation, VPN routing, or device UI.
 
 The production audit is expected to report no high-severity vulnerabilities. The project pins `basic-ftp` 6.2.1 through an npm override because Mockttp's proxy dependency chain otherwise resolves an affected 5.x release.
 

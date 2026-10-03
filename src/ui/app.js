@@ -18,6 +18,7 @@
     collapsedHosts: new Set(),
     contextSessionId: null,
     editingRuleId: null,
+    pendingBootstrap: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -29,6 +30,7 @@
   async function api(path, options = {}) {
     const response = await fetch(path, {
       ...options,
+      signal: options.signal || AbortSignal.timeout(10_000),
       headers: options.body ? { 'content-type': 'application/json', ...(options.headers || {}) } : options.headers,
     });
     if (!response.ok) {
@@ -320,7 +322,7 @@
   }
 
   function curlFor(session) {
-    const parts = ['curl', '-X', session.method];
+    const parts = ['curl', '-X', quoteShell(session.method)];
     for (const [key, raw] of Object.entries(session.requestHeaders || {})) {
       const values = Array.isArray(raw) ? raw : [raw];
       for (const value of values) {
@@ -368,7 +370,7 @@
       '</div>'
     ).join('');
 
-    $('#ruleList [data-rule]').forEach((row) => {
+    $$('#ruleList [data-rule]').forEach((row) => {
       row.querySelector('[data-toggle]').addEventListener('click', (event) => {
         event.stopPropagation();
         toggleRule(row.dataset.rule);
@@ -439,22 +441,35 @@
   }
 
   async function loadBootstrap() {
-    const [status, sessions, rules, ca, mobileStatus] = await Promise.all([
-      api('/api/status'),
-      api('/api/sessions?limit=500'),
-      api('/api/rules'),
-      api('/api/ca'),
-      api('/api/ca/mobile-status'),
-    ]);
-    state.status = status;
-    state.sessions = sessions.sessions || [];
-    state.rules = rules.rules || [];
-    state.ca = ca;
-    state.mobileStatus = mobileStatus;
-    renderStatus();
-    renderSessions();
-    renderRules();
-    renderSettings();
+    const pending = { events: [] };
+    state.pendingBootstrap = pending;
+    try {
+      const [status, sessions, rules, ca, mobileStatus] = await Promise.all([
+        api('/api/status'),
+        api('/api/sessions?limit=500'),
+        api('/api/rules'),
+        api('/api/ca'),
+        api('/api/ca/mobile-status'),
+      ]);
+      if (state.pendingBootstrap !== pending) return;
+      state.status = status;
+      state.sessions = sessions.sessions || [];
+      state.rules = rules.rules || [];
+      state.ca = ca;
+      state.mobileStatus = mobileStatus;
+      state.pendingBootstrap = null;
+      for (const [type, payload] of pending.events) applyEvent(type, payload);
+      if (state.selected && !state.sessions.some((session) => session.id === state.selected.id)) state.selected = null;
+      state.status.sessions = state.sessions.length;
+      state.status.rules = state.rules.length;
+      renderStatus();
+      renderSessions();
+      renderRules();
+      renderSettings();
+      renderDetail();
+    } finally {
+      if (state.pendingBootstrap === pending) state.pendingBootstrap = null;
+    }
   }
 
   function renderSettings() {
@@ -478,7 +493,7 @@
           '<button class=\"button ghost compact\" data-device-disconnect' + (device.state === 'disconnecting' ? ' disabled' : '') + '>Disconnect</button>' +
         '</div>'
       ).join('');
-      $('#deviceList [data-device]').forEach((row) => {
+      $$('#deviceList [data-device]').forEach((row) => {
         row.querySelector('[data-device-disconnect]').addEventListener('click', async () => {
           try { await api('/api/devices/' + encodeURIComponent(row.dataset.device), { method: 'DELETE' }); await updateMobileStatus(); renderSettings(); }
           catch (error) { toast('Could not disconnect device: ' + error.message); }
@@ -517,25 +532,11 @@
     }
   }
 
-  function connectEvents() {
-    state.sse?.close();
-    const source = new EventSource('/api/events');
-    state.sse = source;
-
-    source.addEventListener('open', () => {
-      state.connected = true;
-      renderConnection();
-    });
-    source.addEventListener('error', () => {
-      state.connected = false;
-      renderConnection();
-    });
-    source.addEventListener('status', (event) => {
-      state.status = JSON.parse(event.data);
+  function applyEvent(type, payload) {
+    if (type === 'status') {
+      state.status = payload;
       renderStatus();
-    });
-    source.addEventListener('session-added', (event) => {
-      const payload = JSON.parse(event.data);
+    } else if (type === 'session-added') {
       const session = payload.session;
       state.sessions = [session, ...state.sessions.filter((item) => item.id !== session.id)].slice(0, 500);
       if (state.status) state.status.sessions = state.sessions.length;
@@ -547,27 +548,45 @@
       }
       renderSessions();
       renderStatus();
-    });
-    source.addEventListener('sessions-cleared', () => {
+    } else if (type === 'sessions-cleared') {
       state.sessions = [];
       state.selected = null;
       if (state.status) state.status.sessions = 0;
       renderSessions();
       renderDetail();
       renderStatus();
-    });
-    source.addEventListener('devices-changed', (event) => {
-      const payload = JSON.parse(event.data);
+    } else if (type === 'devices-changed') {
       state.mobileStatus = { ...(state.mobileStatus || {}), activeClients: (payload.devices || []).length, devices: payload.devices || [] };
       renderSettings();
-    });
-    source.addEventListener('rules-changed', (event) => {
-      const payload = JSON.parse(event.data);
+    } else if (type === 'rules-changed') {
       state.rules = payload.rules || [];
       if (state.status) state.status.rules = state.rules.length;
       renderRules();
       renderStatus();
+    }
+  }
+
+  function connectEvents() {
+    state.sse?.close();
+    const source = new EventSource('/api/events');
+    state.sse = source;
+
+    source.addEventListener('open', () => {
+      state.connected = true;
+      renderConnection();
+      loadBootstrap().catch((error) => toast('Could not refresh inspector: ' + error.message));
     });
+    source.addEventListener('error', () => {
+      state.connected = false;
+      renderConnection();
+    });
+    for (const type of ['status', 'session-added', 'sessions-cleared', 'devices-changed', 'rules-changed']) {
+      source.addEventListener(type, (event) => {
+        const payload = JSON.parse(event.data);
+        state.pendingBootstrap?.events.push([type, payload]);
+        applyEvent(type, payload);
+      });
+    }
   }
 
   function bindUi() {

@@ -118,8 +118,8 @@ final class PairingClient {
         }
     }
 
-    private static String urlSegment(String value) {
-        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    static String urlSegment(String value) throws java.io.UnsupportedEncodingException {
+        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20");
     }
 
     static final class SessionConfig {

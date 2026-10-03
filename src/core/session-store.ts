@@ -26,10 +26,13 @@ function toSummary(record: SessionRecord): SessionSummary {
 }
 
 function cloneRecord(record: SessionRecord): SessionRecord {
+  const cloneHeaders = (headers: SessionRecord['requestHeaders']) => Object.fromEntries(
+    Object.entries(headers).map(([name, value]) => [name, Array.isArray(value) ? [...value] : value]),
+  );
   return {
     ...record,
-    requestHeaders: { ...record.requestHeaders },
-    responseHeaders: record.responseHeaders ? { ...record.responseHeaders } : undefined,
+    requestHeaders: cloneHeaders(record.requestHeaders),
+    responseHeaders: record.responseHeaders ? cloneHeaders(record.responseHeaders) : undefined,
   };
 }
 

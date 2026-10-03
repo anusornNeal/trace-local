@@ -61,6 +61,19 @@ function hostFromUrl(url: string): string {
   }
 }
 
+function normalizeControlHost(host: string): string {
+  let normalized = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  try { normalized = new URL(`http://${normalized.includes(':') ? `[${normalized}]` : normalized}`).hostname.replace(/^\[|\]$/g, ''); }
+  catch { return normalized; }
+  const mapped = normalized.match(/^::ffff:([a-f0-9]{1,4}):([a-f0-9]{1,4})$/);
+  if (mapped) {
+    const high = Number.parseInt(mapped[1], 16);
+    const low = Number.parseInt(mapped[2], 16);
+    return `${high >>> 8}.${high & 255}.${low >>> 8}.${low & 255}`;
+  }
+  return normalized;
+}
+
 export class InterceptProxy {
   private server?: Mockttp;
   private currentStatus: ProxyStatus;
@@ -69,6 +82,7 @@ export class InterceptProxy {
   private readonly mapErrors = new Map<string, string>();
   private readonly activeClients = new Map<string, number>();
   private refreshChain: Promise<void> = Promise.resolve();
+  private protectedControl?: { port: number; hosts: Set<string> };
 
   constructor(
     private readonly store: SessionStore,
@@ -87,6 +101,25 @@ export class InterceptProxy {
     return { ...this.currentStatus };
   }
 
+  protectControlEndpoint(port: number, hosts: string[]): void {
+    this.protectedControl = { port, hosts: new Set(hosts.map(normalizeControlHost)) };
+  }
+
+  private targetsControlEndpoint(url: string, rawHost: string | string[] | undefined): boolean {
+    if (!this.protectedControl) return false;
+    try {
+      const target = new URL(url);
+      const port = Number(target.port || (target.protocol === 'https:' || target.protocol === 'wss:' ? 443 : 80));
+      if (port !== this.protectedControl.port) return false;
+      if (this.protectedControl.hosts.has(normalizeControlHost(target.hostname))) return true;
+      // Forwarding preserves Host: an arbitrary DNS alias can still address the control listener.
+      // Unknown Host is rejected downstream; accepted control Host is denied here as well.
+      if (typeof rawHost !== 'string') return false;
+      const authority = new URL(`http://${rawHost}`);
+      return Number(authority.port || 80) === port && this.protectedControl.hosts.has(normalizeControlHost(authority.hostname));
+    } catch { return false; }
+  }
+
   getActiveClientCount(now = Date.now()): number {
     const staleBefore = now - 5 * 60 * 1000;
     for (const [ip, lastSeenAt] of this.activeClients) {
@@ -100,6 +133,7 @@ export class InterceptProxy {
       return this.status;
     }
 
+    let startingServer: Mockttp | undefined;
     try {
       const { getLocal } = await import('mockttp');
       const server = getLocal({
@@ -112,6 +146,7 @@ export class InterceptProxy {
         maxBodySize: this.options.maxBodyPreviewBytes ?? 64 * 1024,
         suggestChanges: false,
       });
+      startingServer = server;
 
       await server.start(this.options.port ?? 8888);
       this.server = server;
@@ -130,6 +165,8 @@ export class InterceptProxy {
 
       return this.status;
     } catch (error) {
+      this.server = undefined;
+      await startingServer?.stop().catch(() => undefined);
       this.currentStatus = {
         running: false,
         port: 0,
@@ -143,6 +180,7 @@ export class InterceptProxy {
   }
 
   async stop(): Promise<void> {
+    await this.refreshChain.catch(() => undefined);
     const server = this.server;
     this.server = undefined;
     if (server) {
@@ -160,13 +198,14 @@ export class InterceptProxy {
   }
 
   async refreshRules(): Promise<void> {
-    this.refreshChain = this.refreshChain.then(async () => {
+    const operation = this.refreshChain.then(async () => {
       if (!this.server) {
         return;
       }
       await this.applyRulesAndSubscriptions();
     });
-    return this.refreshChain;
+    this.refreshChain = operation.catch(() => undefined);
+    return operation;
   }
 
   private async applyRulesAndSubscriptions(): Promise<void> {
@@ -178,6 +217,12 @@ export class InterceptProxy {
     server.reset();
     this.endpointToMapRule.clear();
     await this.subscribeCaptureEvents(server);
+
+    // Never let LAN proxy access bypass the control listener's authority/browser policy.
+    await server.forAnyRequest().matching((request) => this.targetsControlEndpoint(request.url, request.headers.host)).always()
+      .thenReply(403, 'Trace Local control endpoints cannot be accessed through the proxy.');
+    await server.forAnyWebSocket().matching((request) => this.targetsControlEndpoint(request.url, request.headers.host)).always()
+      .thenRejectConnection(403, 'Forbidden');
 
     if (!this.options.allowRemote) {
       await server

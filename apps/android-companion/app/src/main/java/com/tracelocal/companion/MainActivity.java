@@ -1,6 +1,7 @@
 package com.tracelocal.companion;
 
 import android.app.Activity;
+import android.annotation.SuppressLint;
 import android.app.KeyguardManager;
 import android.net.VpnService;
 import android.os.Build;
@@ -38,6 +39,12 @@ public final class MainActivity extends Activity {
 
     private DeviceIdentity identity;
     private PairingContract pairing;
+    private long pendingGeneration;
+    private PairingContract pendingPairing;
+    private boolean pairingBusy;
+    private boolean sessionRequestInFlight;
+    private boolean destroyed;
+    private VpnLifecycle.ConnectionAttempt pendingAttempt;
 
     private TextView statusText;
     private TextView detailText;
@@ -49,12 +56,8 @@ public final class MainActivity extends Activity {
     private final BroadcastReceiver vpnStateReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String state = intent.getStringExtra(TraceVpnService.EXTRA_STATE);
-            String message = intent.getStringExtra(TraceVpnService.EXTRA_MESSAGE);
-            if (state != null) {
-                setStatus(prettyState(state), message == null ? "" : message);
-                disconnectButton.setEnabled(!"disconnected".equals(state));
-            }
+            // Broadcasts are wake-ups: a queued older broadcast must not undo current state.
+            renderVpnState();
         }
     };
 
@@ -63,6 +66,14 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         identity = new DeviceIdentity(this);
         pairing = identity.loadPairing();
+        if (savedInstanceState != null) {
+            long savedGeneration = savedInstanceState.getLong("pending_generation", 0);
+            if (VpnLifecycle.CURRENT.isCurrent(savedGeneration)) {
+                pendingGeneration = savedGeneration;
+                pendingAttempt = new VpnLifecycle.ConnectionAttempt(savedGeneration);
+                pendingPairing = pairing;
+            }
+        }
         if (pairing != null && pairing.isExpired(System.currentTimeMillis())) {
             identity.clearPairing();
             pairing = null;
@@ -70,7 +81,7 @@ public final class MainActivity extends Activity {
 
         setContentView(buildContent());
         handleIntent(getIntent());
-        renderPairing();
+        renderVpnState();
     }
 
     @Override
@@ -81,6 +92,9 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    // Android 13+ receives an explicit NOT_EXPORTED flag; earlier APIs use the legacy overload.
+    // Broadcast payloads are ignored: this receiver only reads the process-local snapshot.
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     protected void onStart() {
         super.onStart();
         IntentFilter filter = new IntentFilter(TraceVpnService.ACTION_STATE);
@@ -89,6 +103,13 @@ public final class MainActivity extends Activity {
         } else {
             registerReceiver(vpnStateReceiver, filter);
         }
+        renderPairing();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle state) {
+        state.putLong("pending_generation", pendingGeneration);
+        super.onSaveInstanceState(state);
     }
 
     @Override
@@ -99,7 +120,12 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        executor.shutdownNow();
+        destroyed = true;
+        // A running request must finish so an already-created desktop session can be acknowledged.
+        if (pendingAttempt != null && (sessionRequestInFlight || !isChangingConfigurations())) {
+            pendingAttempt.cancel(VpnLifecycle.CURRENT);
+        }
+        executor.shutdown();
         super.onDestroy();
     }
 
@@ -235,13 +261,14 @@ public final class MainActivity extends Activity {
     }
 
     private void redeemPairing(String url) {
+        if (VpnLifecycle.CURRENT.snapshot().active || pairingBusy) return;
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             setStatus("Invalid pairing link", "Expected the LAN pairing URL from Trace Local.");
             return;
         }
 
-        setStatus("Pairing", "Contacting desktop…");
         setActionsEnabled(false);
+        setStatus("Pairing", "Contacting desktop…");
         executor.execute(() -> {
             try {
                 PairingContract result = client.redeemPairing(url);
@@ -249,13 +276,15 @@ public final class MainActivity extends Activity {
                     throw new IllegalStateException("Pairing authorization expired. Generate a new QR.");
                 }
                 identity.savePairing(result);
-                pairing = result;
                 runOnUiThread(() -> {
+                    if (destroyed) return;
+                    pairing = result;
                     setActionsEnabled(true);
                     renderPairing();
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
+                    if (destroyed) return;
                     setActionsEnabled(true);
                     setStatus("Pairing failed", message(error));
                 });
@@ -291,6 +320,7 @@ public final class MainActivity extends Activity {
     }
 
     private void connect() {
+        if (VpnLifecycle.CURRENT.snapshot().active) { renderPairing(); return; }
         if (pairing == null) {
             setStatus("Scan first", "Scan a fresh pairing QR before connecting.");
             return;
@@ -307,51 +337,77 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        Intent permission = VpnService.prepare(this);
-        if (permission != null) {
-            startActivityForResult(permission, REQUEST_VPN);
-        } else {
-            createSessionAndStartVpn();
+        pendingGeneration = VpnLifecycle.CURRENT.reserveConnection();
+        if (pendingGeneration < 0) { renderPairing(); return; }
+        pendingAttempt = new VpnLifecycle.ConnectionAttempt(pendingGeneration);
+        pendingPairing = pairing;
+        renderPairing();
+        try {
+            Intent permission = VpnService.prepare(this);
+            if (permission != null) {
+                startActivityForResult(permission, REQUEST_VPN);
+            } else {
+                createSessionAndStartVpn();
+            }
+        } catch (Exception error) {
+            VpnLifecycle.CURRENT.finish(pendingGeneration, "error", message(error));
+            renderVpnState();
         }
     }
 
     private void createSessionAndStartVpn() {
-        if (pairing == null) {
+        final PairingContract connectionPairing = pendingPairing;
+        final long connectionGeneration = pendingGeneration;
+        if (connectionPairing == null || !VpnLifecycle.CURRENT.isCurrent(connectionGeneration)) {
             return;
         }
 
         setStatus("Connecting", "Creating the paired device session…");
         connectButton.setEnabled(false);
+        sessionRequestInFlight = true;
         executor.execute(() -> {
             try {
                 PairingClient.SessionConfig session = client.connect(
-                        pairing,
+                        connectionPairing,
                         identity.deviceId(),
                         identity.displayName()
                 );
                 runOnUiThread(() -> {
-                    connectButton.setEnabled(true);
-                    startVpn(session);
+                    sessionRequestInFlight = false;
+                    if (destroyed || !VpnLifecycle.CURRENT.isCurrent(connectionGeneration)) {
+                        VpnLifecycle.CURRENT.cancelReservation(connectionGeneration);
+                        DisconnectAcknowledgement.submit(() -> client.acknowledgeDisconnected(connectionPairing.apiBaseUrl, session.sessionId));
+                        return;
+                    }
+                    try {
+                        startVpn(session, connectionPairing, connectionGeneration);
+                    } catch (Exception error) {
+                        VpnLifecycle.CURRENT.finish(connectionGeneration, "error", message(error));
+                        DisconnectAcknowledgement.submit(() -> client.acknowledgeDisconnected(connectionPairing.apiBaseUrl, session.sessionId));
+                        renderVpnState();
+                    }
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
-                    connectButton.setEnabled(true);
-                    setStatus("Connection failed", message(error));
+                    sessionRequestInFlight = false;
+                    if (VpnLifecycle.CURRENT.finish(connectionGeneration, "error", message(error)) && !destroyed) renderVpnState();
                 });
             }
         });
     }
 
-    private void startVpn(PairingClient.SessionConfig session) {
+    private void startVpn(PairingClient.SessionConfig session, PairingContract connectionPairing, long connectionGeneration) {
         Intent service = new Intent(this, TraceVpnService.class)
                 .setAction(TraceVpnService.ACTION_START)
-                .putExtra(TraceVpnService.EXTRA_PROXY_HOST, pairing.proxyHost)
-                .putExtra(TraceVpnService.EXTRA_PROXY_PORT, pairing.proxyPort)
-                .putExtra(TraceVpnService.EXTRA_API_BASE_URL, pairing.apiBaseUrl)
+                .putExtra(TraceVpnService.EXTRA_PROXY_HOST, connectionPairing.proxyHost)
+                .putExtra(TraceVpnService.EXTRA_PROXY_PORT, connectionPairing.proxyPort)
+                .putExtra(TraceVpnService.EXTRA_API_BASE_URL, connectionPairing.apiBaseUrl)
+                .putExtra(TraceVpnService.EXTRA_GENERATION, connectionGeneration)
                 .putExtra(TraceVpnService.EXTRA_SESSION_ID, session.sessionId)
                 .putExtra(TraceVpnService.EXTRA_HEARTBEAT_MS, session.heartbeatIntervalMs)
                 .putExtra(TraceVpnService.EXTRA_STALE_AFTER_MS, session.staleAfterMs);
         startForegroundService(service);
+        pendingAttempt.markSubmitted();
         setStatus("Connecting", "Android VPN is starting…");
     }
 
@@ -380,7 +436,8 @@ public final class MainActivity extends Activity {
             if (resultCode == RESULT_OK) {
                 createSessionAndStartVpn();
             } else {
-                setStatus("VPN permission required", "Android VPN permission is required to expose the proxy connection.");
+                VpnLifecycle.CURRENT.finish(pendingGeneration, "error", "Android VPN permission is required to expose the proxy connection.");
+                renderVpnState();
             }
         }
     }
@@ -388,10 +445,17 @@ public final class MainActivity extends Activity {
     private void renderPairing() {
         boolean paired = pairing != null && !pairing.isExpired(System.currentTimeMillis());
         boolean caReady = paired && identity.trustsFingerprint(pairing.caFingerprint256);
+        VpnLifecycle.Snapshot vpn = VpnLifecycle.CURRENT.snapshot();
 
-        installCaButton.setEnabled(paired && !caReady);
-        connectButton.setEnabled(paired && caReady);
-        disconnectButton.setEnabled(true);
+        scanButton.setEnabled(!pairingBusy && !vpn.active);
+        installCaButton.setEnabled(!pairingBusy && !vpn.active && paired && !caReady);
+        connectButton.setEnabled(!pairingBusy && vpn.canConnect(paired, caReady));
+        disconnectButton.setEnabled(vpn.canDisconnect());
+
+        if (vpn.active) {
+            setStatus(prettyState(vpn.state), vpn.message);
+            return;
+        }
 
         if (!paired) {
             setStatus("Ready to pair", "Open Trace Local on the desktop and scan its pairing QR.");
@@ -403,9 +467,14 @@ public final class MainActivity extends Activity {
     }
 
     private void setActionsEnabled(boolean enabled) {
-        scanButton.setEnabled(enabled);
-        installCaButton.setEnabled(enabled && pairing != null);
-        connectButton.setEnabled(enabled && pairing != null);
+        pairingBusy = !enabled;
+        renderPairing();
+    }
+
+    private void renderVpnState() {
+        renderPairing();
+        VpnLifecycle.Snapshot vpn = VpnLifecycle.CURRENT.snapshot();
+        if (!"idle".equals(vpn.state)) setStatus(prettyState(vpn.state), vpn.message);
     }
 
     private void setStatus(String status, String detail) {
@@ -420,9 +489,11 @@ public final class MainActivity extends Activity {
             case "connected":
                 return "Connected";
             case "reconnecting":
+                return "Reconnecting";
+            case "connecting":
                 return "Connecting";
             case "disconnected":
-                return "Ready to connect";
+                return "Disconnected";
             case "error":
                 return "Needs attention";
             default:

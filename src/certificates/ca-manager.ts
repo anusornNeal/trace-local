@@ -4,9 +4,10 @@ import {
   randomUUID,
   X509Certificate,
 } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { withCertificateInitializationLock } from './initialization-lock';
 
 export interface CertificateAuthorityMaterial {
   key: string;
@@ -34,9 +35,12 @@ export function defaultTraceLocalDataDir(): string {
 
 async function atomicWrite(filePath: string, content: string, mode: number): Promise<void> {
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
-  await writeFile(tempPath, content, { encoding: 'utf8', mode });
-  await rm(filePath, { force: true });
-  await rename(tempPath, filePath);
+  try {
+    await writeFile(tempPath, content, { encoding: 'utf8', mode });
+    await rename(tempPath, filePath);
+  } finally {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+  }
 }
 
 function inspectPair(key: string, cert: string): Omit<
@@ -44,6 +48,9 @@ function inspectPair(key: string, cert: string): Omit<
   'key' | 'cert' | 'keyPath' | 'certPath' | 'publicCertPath'
 > {
   const certificate = new X509Certificate(cert);
+  if (!certificate.ca || Date.parse(certificate.validFrom) > Date.now() || Date.parse(certificate.validTo) <= Date.now()) {
+    throw new Error('CA certificate must be a currently valid certificate authority');
+  }
   const privateKey = createPrivateKey(key);
   const privatePublicKey = createPublicKey(privateKey).export({
     type: 'spki',
@@ -71,6 +78,7 @@ export class CertificateAuthorityManager {
   readonly publicCertPath: string;
 
   private material?: CertificateAuthorityMaterial;
+  private ensuring?: Promise<CertificateAuthorityMaterial>;
 
   constructor(private readonly dataDir = defaultTraceLocalDataDir()) {
     this.certDir = path.join(dataDir, 'certificates');
@@ -81,10 +89,24 @@ export class CertificateAuthorityManager {
 
   async ensure(): Promise<CertificateAuthorityMaterial> {
     if (this.material) {
+      if (Date.parse(this.material.expiresAt) <= Date.now()) {
+        throw new Error('Trace Local CA has expired; restart Trace Local to renew it before downloading certificates or pairing.');
+      }
       return { ...this.material };
     }
 
-    await mkdir(this.certDir, { recursive: true });
+    if (!this.ensuring) {
+      this.material = undefined;
+      this.ensuring = this.loadOrGenerate().finally(() => { this.ensuring = undefined; });
+    }
+    return { ...await this.ensuring };
+  }
+
+  private async loadOrGenerate(): Promise<CertificateAuthorityMaterial> {
+    return withCertificateInitializationLock(this.certDir, () => this.loadOrGenerateLocked());
+  }
+
+  private async loadOrGenerateLocked(): Promise<CertificateAuthorityMaterial> {
 
     const existing = await this.tryReadValidPair();
     if (existing) {
@@ -131,11 +153,17 @@ export class CertificateAuthorityManager {
   }
 
   private async tryReadValidPair(): Promise<CertificateAuthorityMaterial | undefined> {
+    const reads = await Promise.allSettled([
+      readFile(this.keyPath, 'utf8'),
+      readFile(this.certPath, 'utf8'),
+    ]);
+    for (const result of reads) {
+      if (result.status === 'rejected' && (result.reason as NodeJS.ErrnoException).code !== 'ENOENT') throw result.reason;
+    }
+    if (reads[0].status !== 'fulfilled' || reads[1].status !== 'fulfilled') return undefined;
+    const [key, cert] = [reads[0].value, reads[1].value];
+
     try {
-      const [key, cert] = await Promise.all([
-        readFile(this.keyPath, 'utf8'),
-        readFile(this.certPath, 'utf8'),
-      ]);
       const inspection = inspectPair(key, cert);
 
       return {

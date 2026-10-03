@@ -30,9 +30,15 @@ import {
   RuleStateRepository,
 } from '../state/rule-state';
 import { getPrimaryLanAddress, getLanAddresses } from './lan-addresses';
+import { requestPolicyError } from './request-policy';
+import { closeHttpServer, trackHttpSockets } from './http-shutdown';
 
 const VERSION = '0.1.0';
 const MAX_CONTROL_BODY_BYTES = 1024 * 1024;
+
+class DaemonStoppingError extends Error {
+  constructor() { super('Daemon is stopping'); }
+}
 
 export interface TraceLocalDaemonOptions {
   controlHost?: string;
@@ -162,6 +168,9 @@ export class TraceLocalDaemon {
   private caMetadata?: CertificateAuthorityMetadata;
   private startupWarnings: string[] = [];
   private readonly eventClients = new Set<http.ServerResponse>();
+  private startPromise?: Promise<DaemonStatus>;
+  private stopPromise?: Promise<void>;
+  private mutationChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly options: TraceLocalDaemonOptions = {}) {
     this.dataDir = options.dataDir ?? defaultTraceLocalDataDir();
@@ -192,9 +201,29 @@ export class TraceLocalDaemon {
     };
   }
 
-  async start(): Promise<DaemonStatus> {
-    if (this.controlServer && this.proxy) return this.status;
+  start(): Promise<DaemonStatus> {
+    if (this.startPromise) return this.startPromise;
+    const pendingStop = this.stopPromise;
+    const operation = (async () => {
+      await pendingStop;
+      return this.startInternal();
+    })();
+    this.startPromise = operation;
+    void operation.finally(() => { if (this.startPromise === operation) this.startPromise = undefined; }).catch(() => undefined);
+    return operation;
+  }
 
+  private async startInternal(): Promise<DaemonStatus> {
+    if (this.controlServer && this.proxy) return this.status;
+    try {
+      return await this.startResources();
+    } catch (error) {
+      await this.closeListeners().catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async startResources(): Promise<DaemonStatus> {
     this.startupWarnings = [];
     const persistedRules = await this.ruleState.loadRecovering();
     this.rules.hydrate(persistedRules.rules);
@@ -219,8 +248,8 @@ export class TraceLocalDaemon {
       allowRemote: this.options.allowRemote,
       additionalTrustedCaCerts: this.options.additionalTrustedCaCerts,
     });
-    await proxy.start();
     this.proxy = proxy;
+    await proxy.start();
 
     const controlHost = this.options.controlHost ?? '127.0.0.1';
     const controlPort = this.options.controlPort ?? 4040;
@@ -236,6 +265,7 @@ export class TraceLocalDaemon {
         }
       });
     });
+    trackHttpSockets(this.controlServer);
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -246,6 +276,12 @@ export class TraceLocalDaemon {
         };
         const onListening = () => {
           controlServer.off('error', onError);
+          this.controlPort = (controlServer.address() as AddressInfo).port;
+          proxy.protectControlEndpoint(this.controlPort, [
+            '127.0.0.1', '::1', 'localhost', controlHost,
+            ...getLanAddresses().map((address) => address.address),
+            (controlServer.address() as AddressInfo).address,
+          ]);
           resolve();
         };
         controlServer.once('error', onError);
@@ -265,16 +301,34 @@ export class TraceLocalDaemon {
     return this.status;
   }
 
-  async stop(): Promise<void> {
-    const controlServer = this.controlServer;
-    const mobileCaServer = this.mobileCaServer;
-    const proxy = this.proxy;
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    const pendingStart = this.startPromise;
+    const operation = (async () => {
+      await pendingStart?.catch(() => undefined);
+      await this.stopInternal();
+    })();
+    this.stopPromise = operation;
+    void operation.finally(() => { if (this.stopPromise === operation) this.stopPromise = undefined; }).catch(() => undefined);
+    return operation;
+  }
 
+  private async stopInternal(): Promise<void> {
+    const mobileCaServer = this.mobileCaServer;
     if (mobileCaServer && this.deviceSessions.size > 0) {
       this.deviceSessions.requestDisconnectAll();
       this.broadcastEvent('devices-changed', { devices: this.deviceSessions.list() });
       await this.waitForDeviceDisconnects(DEFAULT_DEVICE_HEARTBEAT_MS + 1_500);
     }
+    await this.closeListeners();
+  }
+
+  private async closeListeners(): Promise<void> {
+    // Drain admitted saves/refreshes before a new lifecycle can hydrate rules or start a proxy.
+    await this.mutationChain;
+    const controlServer = this.controlServer;
+    const mobileCaServer = this.mobileCaServer;
+    const proxy = this.proxy;
 
     this.controlServer = undefined;
     this.mobileCaServer = undefined;
@@ -285,19 +339,15 @@ export class TraceLocalDaemon {
     }
     this.eventClients.clear();
 
-    if (controlServer) {
-      await new Promise<void>((resolve, reject) => {
-        controlServer.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-
-    if (mobileCaServer) {
-      await new Promise<void>((resolve) => mobileCaServer.close(() => resolve()));
-    }
-
-    if (proxy) await proxy.stop();
+    const results = await Promise.allSettled([
+      controlServer ? closeHttpServer(controlServer) : Promise.resolve(),
+      mobileCaServer ? closeHttpServer(mobileCaServer) : Promise.resolve(),
+      proxy ? proxy.stop() : Promise.resolve(),
+    ]);
     this.controlPort = 0;
     this.mobileCaPort = 0;
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map((result) => result.reason), 'Daemon shutdown failed');
   }
 
   private async waitForDeviceDisconnects(timeoutMs: number): Promise<void> {
@@ -312,10 +362,19 @@ export class TraceLocalDaemon {
   }
 
   private async persistRuleMutation<T>(mutate: () => T): Promise<T> {
+    if (this.stopPromise) throw new DaemonStoppingError();
+    const operation = this.mutationChain.then(() => this.performRuleMutation(mutate));
+    this.mutationChain = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
+  private async performRuleMutation<T>(mutate: () => T): Promise<T> {
     const before = this.rules.list();
 
     try {
       const result = mutate();
+      // Missing update/delete targets are checked within the queue and are not persisted.
+      if (result === undefined || result === false) return result;
       await this.ruleState.save(this.rules.list());
       await this.refreshProxyRules();
       this.broadcastEvent('rules-changed', { rules: this.rules.list() });
@@ -393,6 +452,7 @@ export class TraceLocalDaemon {
         }
       });
     });
+    trackHttpSockets(server);
 
     try {
       await new Promise<void>((resolve, reject) => {
@@ -404,15 +464,19 @@ export class TraceLocalDaemon {
     } catch (error) {
       this.mobileCaPort = 0;
       this.startupWarnings.push(`Mobile CA setup could not bind to the LAN: ${error instanceof Error ? error.message : String(error)}`);
-      await new Promise<void>((resolve) => server.close(() => resolve())).catch(() => undefined);
+      await closeHttpServer(server).catch(() => undefined);
     }
   }
 
   private async handleMobileCaRequest(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
+    const rejection = requestPolicyError(request, this.mobileCaPort, '0.0.0.0');
+    if (rejection) { sendJson(response, rejection.status, { error: rejection.error }); return; }
     const method = request.method ?? 'GET';
     const url = new URL(request.url ?? '/', 'http://localhost');
 
     if (method === 'GET' && url.pathname.startsWith('/pair/')) {
+      if (this.stopPromise) { sendJson(response, 503, { error: 'daemon_stopping' }); return; }
+      if (this.rejectExpiredCa(response)) return;
       if (url.searchParams.get('v') !== String(PAIRING_PROTOCOL_VERSION)) {
         sendJson(response, 400, { error: 'unsupported_pairing_protocol' });
         return;
@@ -451,7 +515,11 @@ export class TraceLocalDaemon {
       return;
     }
     if (method === 'POST' && url.pathname === '/device/session') {
+      if (this.stopPromise) { sendJson(response, 503, { error: 'daemon_stopping' }); return; }
+      if (this.rejectExpiredCa(response)) return;
       const body = asObject(await readJsonBody(request));
+      if (this.stopPromise) { sendJson(response, 503, { error: 'daemon_stopping' }); return; }
+      if (this.rejectExpiredCa(response)) return;
       const pairingId = typeof body.pairingId === 'string' ? body.pairingId : '';
       const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : '';
       const name = typeof body.name === 'string' ? body.name.trim() : '';
@@ -509,11 +577,25 @@ export class TraceLocalDaemon {
     return 'trace-local-' + compact.slice(0, 16);
   }
 
+  private rejectExpiredCa(response: http.ServerResponse): boolean {
+    if (this.caMetadata && Date.parse(this.caMetadata.expiresAt) <= Date.now()) {
+      sendJson(response, 503, { error: 'ca_expired' });
+      return true;
+    }
+    return false;
+  }
+
   private async handleControlRequest(
     request: http.IncomingMessage,
     response: http.ServerResponse,
   ): Promise<void> {
+    const rejection = requestPolicyError(request, this.controlPort, this.options.controlHost ?? '127.0.0.1');
+    if (rejection) { sendJson(response, rejection.status, { error: rejection.error }); return; }
     const method = request.method ?? 'GET';
+    if (this.stopPromise && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      sendJson(response, 503, { error: 'daemon_stopping' });
+      return;
+    }
     const url = new URL(request.url ?? '/', 'http://localhost');
 
     if (method === 'GET' && (await tryServeUiAsset(url.pathname, response))) {
@@ -584,6 +666,7 @@ export class TraceLocalDaemon {
       const proxyPort = this.proxy?.status.port ?? 0;
       const metadata = this.caMetadata ?? (await this.caManager.metadata());
       this.caMetadata = metadata;
+      if (this.rejectExpiredCa(response)) return;
 
       if (!lanAddress || this.mobileCaPort === 0 || proxyPort === 0) {
         sendJson(response, 503, { error: 'pairing_unavailable', message: 'No LAN-reachable pairing endpoint is available.' });
@@ -607,6 +690,7 @@ export class TraceLocalDaemon {
       return;
     }
     if (method === 'POST' && url.pathname === '/api/ca/mobile-token') {
+      if (this.rejectExpiredCa(response)) return;
       const lanAddress = getPrimaryLanAddress();
       if (!lanAddress || this.mobileCaPort === 0) {
         sendJson(response, 503, { error: 'mobile_ca_unavailable', message: 'No LAN-reachable CA setup endpoint is available.' });
@@ -705,8 +789,8 @@ export class TraceLocalDaemon {
         const rules = await this.persistRuleMutation(() => this.rules.hydrate(document.rules));
         sendJson(response, 200, { imported: rules.length, rules });
       } catch (error) {
-        sendJson(response, 400, {
-          error: 'invalid_rule_state',
+        sendJson(response, error instanceof DaemonStoppingError ? 503 : 400, {
+          error: error instanceof DaemonStoppingError ? 'daemon_stopping' : 'invalid_rule_state',
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -724,8 +808,8 @@ export class TraceLocalDaemon {
         const rule = await this.persistRuleMutation(() => this.rules.create(input));
         sendJson(response, 201, rule);
       } catch (error) {
-        sendJson(response, 400, {
-          error: 'invalid_rule',
+        sendJson(response, error instanceof DaemonStoppingError ? 503 : 400, {
+          error: error instanceof DaemonStoppingError ? 'daemon_stopping' : 'invalid_rule',
           message: error instanceof Error ? error.message : String(error),
         });
       }
@@ -738,15 +822,15 @@ export class TraceLocalDaemon {
       if (method === 'PATCH') {
         try {
           const input = asObject(await readJsonBody(request)) as unknown as UpdateMapRuleInput;
-          if (!this.rules.get(id)) {
+          const rule = await this.persistRuleMutation(() => this.rules.update(id, input));
+          if (!rule) {
             sendJson(response, 404, { error: 'rule_not_found', id });
             return;
           }
-          const rule = await this.persistRuleMutation(() => this.rules.update(id, input)!);
           sendJson(response, 200, rule);
         } catch (error) {
-          sendJson(response, 400, {
-            error: 'invalid_rule',
+          sendJson(response, error instanceof DaemonStoppingError ? 503 : 400, {
+            error: error instanceof DaemonStoppingError ? 'daemon_stopping' : 'invalid_rule',
             message: error instanceof Error ? error.message : String(error),
           });
         }
@@ -754,11 +838,11 @@ export class TraceLocalDaemon {
       }
 
       if (method === 'DELETE') {
-        if (!this.rules.get(id)) {
+        const deleted = await this.persistRuleMutation(() => this.rules.delete(id));
+        if (!deleted) {
           sendJson(response, 404, { error: 'rule_not_found', id });
           return;
         }
-        await this.persistRuleMutation(() => this.rules.delete(id));
         sendJson(response, 200, { deleted: true, id });
         return;
       }

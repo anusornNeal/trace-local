@@ -32,6 +32,8 @@ While connected the service:
 - tears down the VPN when the desktop remains unreachable past the advertised stale timeout;
 - always closes the VPN interface before stopping, restoring normal device routing.
 
+Reopening the activity restores the current process-local VPN status and keeps Disconnect available even if pairing authorization has expired. Heartbeat recovery returns the status to Connected. Duplicate connection requests are ignored, and late heartbeat results cannot revive a stopped session. Disconnect acknowledgements are best effort, run after the interface is closed, and their executor shuts down after submission.
+
 ## Certificate trust
 
 The desktop returns a short-lived public CA download URL after the QR is redeemed. Android's system certificate installer is used; the private CA key never leaves the desktop.

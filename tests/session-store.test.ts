@@ -34,6 +34,23 @@ test('SessionStore keeps newest sessions first and evicts oldest', () => {
   assert.equal(store.get('two')?.path, '/two');
 });
 
+test('SessionStore isolates repeated header arrays on input and every output', () => {
+  const store = new SessionStore();
+  const source = record('headers', 1);
+  source.requestHeaders.accept = ['text/plain'];
+  source.responseHeaders = { 'set-cookie': ['original=1', 'other=2'] };
+  store.add(source);
+  source.requestHeaders.accept.push('mutated-input');
+  (source.responseHeaders['set-cookie'] as string[]).push('mutated-input');
+  const retrieved = store.get('headers')!;
+  (retrieved.requestHeaders.accept as string[]).push('mutated-output');
+  (retrieved.responseHeaders!['set-cookie'] as string[]).splice(0);
+  const exported = store.records()[0];
+  (exported.requestHeaders.accept as string[]).push('mutated-export');
+  assert.deepEqual(store.get('headers')!.requestHeaders.accept, ['text/plain']);
+  assert.deepEqual(store.records()[0].responseHeaders!['set-cookie'], ['original=1', 'other=2']);
+});
+
 test('SessionStore replaces duplicate ids and clears all sessions', () => {
   const store = new SessionStore(3);
   store.add(record('same', 1));
