@@ -1,0 +1,47 @@
+name: TraceLocal
+options:
+  bundleIdPrefix: com.tracelocal
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  TraceLocal:
+    type: application
+    platform: iOS
+    sources:
+      - TraceLocal
+    info:
+      path: TraceLocal/Info.plist
+    entitlements:
+      path: TraceLocal/TraceLocal.entitlements
+    dependencies:
+      - target: TraceLocalExtension
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tracelocal.companion
+        SWIFT_VERSION: "5.0"
+  TraceLocalExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - TraceLocalExtension
+    info:
+      path: TraceLocalExtension/Info.plist
+    entitlements:
+      path: TraceLocalExtension/TraceLocalExtension.entitlements
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tracelocal.companion.PacketTunnel
+        SWIFT_VERSION: "5.0"
+        APPLICATION_EXTENSION_API_ONLY: YES
+  TraceLocalTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - TraceLocalTests
+    dependencies:
+      - target: TraceLocal
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tracelocal.companion.Tests
+        SWIFT_VERSION: "5.0"

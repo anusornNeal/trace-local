@@ -165,26 +165,31 @@
           </article>
 
           <article class="settings-card">
-            <h2>Mobile Device Setup</h2>
+            <h2>Mobile companions</h2>
+            <p class="mobile-flow-copy">Normal flow: <strong>Scan QR → trust CA once → approve VPN → Connected</strong>. Returning devices normally only scan a fresh QR and connect.</p>
             <div class="setting-row"><span>Proxy LAN address</span><code id="mobileProxyAddress">—</code></div>
-            <div class="setting-row"><span>Connected devices</span><strong id="connectedDevices">0 active</strong></div>
-            <div id="mobileQrSection" hidden>
-              <div class="qr-container">
-                <canvas id="qrCanvas" width="200" height="200"></canvas>
-                <div class="qr-info">
+            <div class="setting-row"><span>Connected devices</span><strong id="connectedDevices">0 connected</strong></div>
+            <div class="device-controls"><button id="disconnectAllDevices" class="button ghost compact">Disconnect all</button></div>
+            <div id="deviceList" class="device-list"></div>
+            <details class="advanced-mobile-setup">
+              <summary>Advanced manual CA setup</summary>
+              <p>Use this only for a controlled client that cannot run the companion. Normal Android/iPhone setup does not require editing the Wi-Fi proxy.</p>
+              <div id="mobileQrSection" hidden>
+                <div class="manual-link-row">
+                  <code id="mobileCaLink">—</code>
                   <p class="qr-expires">Expires in <strong id="qrExpiry">—</strong></p>
-                  <button id="copyMobileLink" class="button ghost compact">Copy link</button>
+                  <button id="copyMobileLink" class="button ghost compact">Copy CA link</button>
                 </div>
               </div>
-            </div>
-            <button id="generateQr" class="button ghost">Generate CA install QR</button>
+              <button id="generateQr" class="button ghost">Generate short-lived CA link</button>
+            </details>
             <div class="mobile-pairing">
-              <h3>Companion pairing</h3>
+              <h3>Pair a companion</h3>
               <div id="pairingQrSection" hidden>
                 <div class="qr-container">
                   <div id="pairingQrSvg" class="pairing-qr" aria-label="Pairing QR code"></div>
                   <div class="qr-info">
-                    <p class="qr-expires">Expires in <strong id="pairingQrExpiry">—</strong></p>
+                    <p class="qr-expires">Scan within <strong id="pairingQrExpiry">—</strong></p>
                     <code id="pairingDesktopId">—</code>
                     <button id="copyPairingLink" class="button ghost compact">Copy pairing link</button>
                   </div>
@@ -193,7 +198,7 @@
               <button id="generatePairingQr" class="button primary">Pair mobile device</button>
             </div>
             <div class="notice mobile-notice">
-              Pairing QR codes are single-use and expire quickly. The QR contains only a short-lived LAN pairing URL. CA private-key material is never included. New devices download <strong>tracelocal-ca.crt</strong> and confirm installation manually; returning companions can skip that step after the CA fingerprint trust probe matches.
+              Pairing QR codes are single-use. After a successful scan, the companion gets a longer setup window for the OS-required certificate/VPN steps. The CA private key never leaves this computer.
             </div>
           </article>
 

@@ -65,6 +65,12 @@ describe('secure pairing endpoint', () => {
     assert.equal(payload.desktopId, pairing.desktopId);
     assert.equal(payload.proxyAddress, pairing.proxyAddress);
     assert.equal(payload.caFingerprint256, pairing.caFingerprint256);
+    assert.equal(payload.apiBaseUrl, new URL(pairing.url).origin);
+    assert.match(payload.caDownloadUrl, /^http:\/\//);
+    assert.ok(payload.expiresAt > pairing.expiresAt);
+    const caResponse = await fetch(payload.caDownloadUrl);
+    assert.equal(caResponse.status, 200);
+    assert.match(await caResponse.text(), /BEGIN CERTIFICATE/);
     assert.equal('privateKey' in payload, false);
     assert.equal(JSON.stringify(payload).includes('PRIVATE KEY'), false);
 

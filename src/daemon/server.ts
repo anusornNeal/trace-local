@@ -11,6 +11,11 @@ import {
 } from '../certificates/ca-manager';
 import { CaTokenServer } from '../certificates/ca-token-server';
 import { SessionStore } from '../core/session-store';
+import {
+  DEFAULT_DEVICE_HEARTBEAT_MS,
+  DEFAULT_DEVICE_STALE_MS,
+  DeviceSessionStore,
+} from '../devices/device-session-store';
 import type {
   CreateMapRuleInput,
   DaemonStatus,
@@ -146,6 +151,7 @@ export class TraceLocalDaemon {
   readonly ruleState: RuleStateRepository;
   readonly caTokenServer: CaTokenServer;
   readonly pairingTokens: PairingTokenStore;
+  readonly deviceSessions: DeviceSessionStore;
   readonly dataDir: string;
   proxy?: InterceptProxy;
 
@@ -165,6 +171,7 @@ export class TraceLocalDaemon {
     this.ruleState = new RuleStateRepository(this.dataDir);
     this.caTokenServer = new CaTokenServer();
     this.pairingTokens = new PairingTokenStore();
+    this.deviceSessions = new DeviceSessionStore();
     this.store.subscribe((event) => this.broadcastEvent(event.type, event));
   }
 
@@ -262,6 +269,13 @@ export class TraceLocalDaemon {
     const controlServer = this.controlServer;
     const mobileCaServer = this.mobileCaServer;
     const proxy = this.proxy;
+
+    if (mobileCaServer && this.deviceSessions.size > 0) {
+      this.deviceSessions.requestDisconnectAll();
+      this.broadcastEvent('devices-changed', { devices: this.deviceSessions.list() });
+      await this.waitForDeviceDisconnects(DEFAULT_DEVICE_HEARTBEAT_MS + 1_500);
+    }
+
     this.controlServer = undefined;
     this.mobileCaServer = undefined;
     this.proxy = undefined;
@@ -284,6 +298,13 @@ export class TraceLocalDaemon {
     if (proxy) await proxy.stop();
     this.controlPort = 0;
     this.mobileCaPort = 0;
+  }
+
+  private async waitForDeviceDisconnects(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.deviceSessions.size > 0 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
   }
 
   private async refreshProxyRules(): Promise<void> {
@@ -404,6 +425,9 @@ export class TraceLocalDaemon {
         return;
       }
 
+      const sessionAuthorizationExpiresAt = Date.now() + 10 * 60 * 1000;
+      this.deviceSessions.authorizePairing(pairing.pairingId, sessionAuthorizationExpiresAt);
+
       const metadata = this.caMetadata ?? (await this.caManager.metadata());
       this.caMetadata = metadata;
       const lanAddress = getPrimaryLanAddress();
@@ -419,9 +443,46 @@ export class TraceLocalDaemon {
         desktopId: this.desktopId(metadata.fingerprint256),
         proxyAddress: lanAddress + ':' + proxyPort,
         caFingerprint256: metadata.fingerprint256,
+        apiBaseUrl: 'http://' + lanAddress + ':' + this.mobileCaPort,
+        caDownloadUrl: 'http://' + lanAddress + ':' + this.mobileCaPort + '/ca/' + this.caTokenServer.createToken().token,
         issuedAt: pairing.createdAt,
-        expiresAt: pairing.expiresAt,
+        expiresAt: sessionAuthorizationExpiresAt,
       });
+      return;
+    }
+    if (method === 'POST' && url.pathname === '/device/session') {
+      const body = asObject(await readJsonBody(request));
+      const pairingId = typeof body.pairingId === 'string' ? body.pairingId : '';
+      const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : '';
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      const platform = body.platform === 'android' || body.platform === 'ios' ? body.platform : 'other';
+      if (!pairingId || !deviceId || !name) { sendJson(response, 400, { error: 'invalid_device_identity' }); return; }
+      const session = this.deviceSessions.connect(pairingId, { deviceId, name, platform });
+      if (!session) { sendJson(response, 401, { error: 'pairing_not_authorized' }); return; }
+      this.broadcastEvent('devices-changed', { devices: this.deviceSessions.list() });
+      sendJson(response, 201, {
+        session,
+        heartbeatIntervalMs: DEFAULT_DEVICE_HEARTBEAT_MS,
+        staleAfterMs: DEFAULT_DEVICE_STALE_MS,
+        restoreRoutingOnDisconnect: true,
+      });
+      return;
+    }
+
+    const heartbeatMatch = url.pathname.match(/^\/device\/session\/([^/]+)\/heartbeat$/);
+    if (method === 'POST' && heartbeatMatch) {
+      const heartbeat = this.deviceSessions.heartbeat(decodeURIComponent(heartbeatMatch[1]));
+      if (!heartbeat) { sendJson(response, 404, { error: 'device_session_not_found', restoreRouting: true }); return; }
+      sendJson(response, 200, heartbeat);
+      return;
+    }
+
+    const disconnectedMatch = url.pathname.match(/^\/device\/session\/([^/]+)\/disconnected$/);
+    if (method === 'POST' && disconnectedMatch) {
+      const removed = this.deviceSessions.acknowledgeDisconnected(decodeURIComponent(disconnectedMatch[1]));
+      if (!removed) { sendJson(response, 404, { error: 'device_session_not_found' }); return; }
+      this.broadcastEvent('devices-changed', { devices: this.deviceSessions.list() });
+      sendJson(response, 200, { disconnected: true });
       return;
     }
     if (method !== 'GET' || !url.pathname.startsWith('/ca/')) {
@@ -499,6 +560,23 @@ export class TraceLocalDaemon {
       const expectedBytes = Buffer.from(expected);
       const trusted = suppliedBytes.length === expectedBytes.length && timingSafeEqual(suppliedBytes, expectedBytes);
       sendJson(response, 200, { trusted, fingerprint256: expected, publicCertPath: metadata.publicCertPath });
+      return;
+    }
+    if (method === 'GET' && url.pathname === '/api/devices') { sendJson(response, 200, { devices: this.deviceSessions.list() }); return; }
+
+    if (method === 'DELETE' && url.pathname === '/api/devices') {
+      const devices = this.deviceSessions.requestDisconnectAll();
+      this.broadcastEvent('devices-changed', { devices: this.deviceSessions.list() });
+      sendJson(response, 200, { requested: devices.length, devices });
+      return;
+    }
+
+    const deviceDeleteMatch = url.pathname.match(/^\/api\/devices\/([^/]+)$/);
+    if (method === 'DELETE' && deviceDeleteMatch) {
+      const session = this.deviceSessions.requestDisconnect(decodeURIComponent(deviceDeleteMatch[1]));
+      if (!session) { sendJson(response, 404, { error: 'device_session_not_found' }); return; }
+      this.broadcastEvent('devices-changed', { devices: this.deviceSessions.list() });
+      sendJson(response, 200, { requested: true, session });
       return;
     }
     if (method === 'POST' && url.pathname === '/api/pairing/token') {
@@ -581,7 +659,9 @@ export class TraceLocalDaemon {
       const lanAddress = getPrimaryLanAddress();
       const proxyPort = this.proxy?.status.port || 0;
       sendJson(response, 200, {
-        activeClients: this.proxy?.getActiveClientCount() ?? 0,
+        activeClients: this.deviceSessions.size,
+        proxyActiveClients: this.proxy?.getActiveClientCount() ?? 0,
+        devices: this.deviceSessions.list(),
         proxyAddress: lanAddress ? `${lanAddress}:${proxyPort}` : null,
         lanAddresses: getLanAddresses().map((addr) => ({
           address: addr.address,

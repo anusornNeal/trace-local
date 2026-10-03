@@ -467,7 +467,23 @@
       const proxyAddr = state.mobileStatus.proxyAddress || '—';
       $('#mobileProxyAddress').textContent = proxyAddr;
       const count = state.mobileStatus.activeClients || 0;
-      $('#connectedDevices').textContent = count + (count === 1 ? ' active' : ' active');
+      $('#connectedDevices').textContent = count + ' connected';
+      $('#disconnectAllDevices').disabled = count === 0;
+      const devices = state.mobileStatus.devices || [];
+      const platformLabel = (platform) => platform === 'ios' ? 'iOS' : platform === 'android' ? 'Android' : 'Device';
+      const stateLabel = (value) => value === 'disconnecting' ? 'Disconnecting' : 'Connected';
+      $('#deviceList').innerHTML = devices.map((device) =>
+        '<div class=\"device-row\" data-device=\"' + escapeHtml(device.sessionId) + '\">' +
+          '<div><strong>' + escapeHtml(device.name) + '</strong><span>' + escapeHtml(platformLabel(device.platform) + ' · ' + stateLabel(device.state)) + '</span></div>' +
+          '<button class=\"button ghost compact\" data-device-disconnect' + (device.state === 'disconnecting' ? ' disabled' : '') + '>Disconnect</button>' +
+        '</div>'
+      ).join('');
+      $('#deviceList [data-device]').forEach((row) => {
+        row.querySelector('[data-device-disconnect]').addEventListener('click', async () => {
+          try { await api('/api/devices/' + encodeURIComponent(row.dataset.device), { method: 'DELETE' }); await updateMobileStatus(); renderSettings(); }
+          catch (error) { toast('Could not disconnect device: ' + error.message); }
+        });
+      });
     }
 
     if (state.pairingToken) {
@@ -539,6 +555,11 @@
       renderSessions();
       renderDetail();
       renderStatus();
+    });
+    source.addEventListener('devices-changed', (event) => {
+      const payload = JSON.parse(event.data);
+      state.mobileStatus = { ...(state.mobileStatus || {}), activeClients: (payload.devices || []).length, devices: payload.devices || [] };
+      renderSettings();
     });
     source.addEventListener('rules-changed', (event) => {
       const payload = JSON.parse(event.data);
@@ -640,6 +661,10 @@
       copyText(element.textContent);
     }));
 
+    $('#disconnectAllDevices').addEventListener('click', async () => {
+      try { await api('/api/devices', { method: 'DELETE' }); await updateMobileStatus(); renderSettings(); }
+      catch (error) { toast('Could not disconnect devices: ' + error.message); }
+    });
     $('#generateQr').addEventListener('click', async () => {
       try {
         const tokenData = await api('/api/ca/mobile-token', { method: 'POST' });
@@ -647,7 +672,7 @@
         $('#mobileQrSection').hidden = false;
         $('#generateQr').hidden = true;
 
-        generateQrCode(tokenData.url);
+        $('#mobileCaLink').textContent = tokenData.url;
 
         clearInterval(state.qrExpiryTimer);
         state.qrExpiryTimer = setInterval(() => {
@@ -695,116 +720,6 @@
     } catch (error) {
       // Silently fail
     }
-  }
-
-  function generateQrCode(url) {
-    const canvas = $('#qrCanvas');
-    const ctx = canvas.getContext('2d');
-    const size = 200;
-
-    // Use inline SVG QR code generation
-    const qrSvg = generateQrSvg(url);
-    const img = new Image();
-    const svgBlob = new Blob([qrSvg], { type: 'image/svg+xml' });
-    const svgUrl = URL.createObjectURL(svgBlob);
-
-    img.onload = () => {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, size, size);
-      ctx.drawImage(img, 0, 0, size, size);
-      URL.revokeObjectURL(svgUrl);
-    };
-    img.src = svgUrl;
-  }
-
-  function generateQrSvg(text) {
-    // Minimal QR Code generator - simplified for browser use
-    const modules = encodeQrData(text);
-    const size = modules.length;
-    const svgSize = 200;
-    const scale = svgSize / size;
-
-    let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgSize}" height="${svgSize}" viewBox="0 0 ${size} ${size}">`;
-    svg += `<rect width="${size}" height="${size}" fill="white"/>`;
-
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        if (modules[y][x]) {
-          svg += `<rect x="${x}" y="${y}" width="1" height="1" fill="black"/>`;
-        }
-      }
-    }
-
-    svg += '</svg>';
-    return svg;
-  }
-
-  function encodeQrData(text) {
-    // Simple QR code encoder (version 3, 29x29)
-    const size = 29;
-    const modules = Array(size).fill(0).map(() => Array(size).fill(false));
-
-    // Add finder patterns (position detection patterns)
-    addFinderPattern(modules, 0, 0);
-    addFinderPattern(modules, size - 7, 0);
-    addFinderPattern(modules, 0, size - 7);
-
-    // Add timing patterns
-    for (let i = 8; i < size - 8; i++) {
-      modules[6][i] = i % 2 === 0;
-      modules[i][6] = i % 2 === 0;
-    }
-
-    // Encode data (simplified - creates readable pattern)
-    let hash = 0;
-    for (let i = 0; i < text.length; i++) {
-      hash = ((hash << 5) - hash) + text.charCodeAt(i);
-      hash |= 0;
-    }
-
-    // Fill data region
-    let bitIndex = 0;
-    for (let col = size - 1; col > 0; col -= 2) {
-      if (col === 6) col--;
-      for (let row = 0; row < size; row++) {
-        for (let c = 0; c < 2; c++) {
-          const x = col - c;
-          const y = (col + 1) & 2 ? size - 1 - row : row;
-          if (!isReserved(modules, x, y)) {
-            modules[y][x] = ((hash >> (bitIndex % 32)) & 1) === 1;
-            bitIndex++;
-          }
-        }
-      }
-    }
-
-    return modules;
-  }
-
-  function addFinderPattern(modules, top, left) {
-    for (let dy = -1; dy <= 7; dy++) {
-      for (let dx = -1; dx <= 7; dx++) {
-        const y = top + dy;
-        const x = left + dx;
-        if (y >= 0 && y < modules.length && x >= 0 && x < modules.length) {
-          const dist = Math.max(Math.abs(dx - 3), Math.abs(dy - 3));
-          modules[y][x] = dist !== 1 && dist !== 5;
-        }
-      }
-    }
-  }
-
-  function isReserved(modules, x, y) {
-    const size = modules.length;
-    // Check if in finder pattern area
-    if ((x <= 8 && y <= 8) || (x >= size - 8 && y <= 8) || (x <= 8 && y >= size - 8)) {
-      return true;
-    }
-    // Check if on timing pattern
-    if (x === 6 || y === 6) {
-      return true;
-    }
-    return false;
   }
 
   bindUi();

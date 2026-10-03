@@ -286,6 +286,39 @@ async function main(): Promise<void> {
       });
   }
 
+  const devices = program.command('devices').description('Inspect and disconnect paired devices');
+
+  devices
+    .command('list')
+    .description('List paired/connected device sessions')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .option('--json', 'emit compact machine-readable JSON')
+    .action(async (options) => {
+      const result = await requestJson(options.controlUrl, '/api/devices');
+      const output = options.json ? JSON.stringify(result) : JSON.stringify(result, null, 2);
+      process.stdout.write(output + '\n');
+    });
+
+  devices
+    .command('disconnect')
+    .argument('[id]', 'device session id')
+    .description('Request one device, or all devices, to stop tunneling and restore normal routing')
+    .option('--all', 'disconnect all paired device sessions')
+    .option('--control-url <url>', 'daemon control URL', 'http://127.0.0.1:4040')
+    .option('--json', 'emit compact machine-readable JSON')
+    .action(async (id, options) => {
+      if (Boolean(options.all) === Boolean(id)) {
+        throw new Error('Specify exactly one device session id or --all');
+      }
+
+      const requestPath = options.all
+        ? '/api/devices'
+        : '/api/devices/' + encodeURIComponent(String(id));
+      const result = await requestJson(options.controlUrl, requestPath, jsonRequest('DELETE'));
+      const output = options.json ? JSON.stringify(result) : JSON.stringify(result, null, 2);
+      process.stdout.write(output + '\n');
+    });
+
   const ca = program.command('ca').description('Inspect the local HTTPS interception CA');
 
   ca

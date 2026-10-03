@@ -115,6 +115,23 @@ export interface PairingPayloadV1 {
   desktopId: string;
   proxyAddress: string;
   caFingerprint256: string;
+  apiBaseUrl: string;
+  caDownloadUrl: string;
   issuedAt: number;
   expiresAt: number;
+}
+
+export type DevicePlatform = 'android' | 'ios' | 'other';
+export type DeviceSessionState = 'connected' | 'disconnecting';
+
+export interface PairedDeviceSession {
+  sessionId: string;
+  pairingId: string;
+  deviceId: string;
+  name: string;
+  platform: DevicePlatform;
+  connectedAt: number;
+  lastHeartbeatAt: number;
+  state: DeviceSessionState;
+  disconnectRequested: boolean;
 }
