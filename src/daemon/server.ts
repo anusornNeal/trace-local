@@ -11,7 +11,11 @@ import {
 } from '../certificates/ca-manager';
 import { CaTokenServer } from '../certificates/ca-token-server';
 import { SessionStore } from '../core/session-store';
-import { DeviceSessionStore } from '../devices/device-session-store';
+import {
+  DEFAULT_DEVICE_HEARTBEAT_MS,
+  DEFAULT_DEVICE_STALE_MS,
+  DeviceSessionStore,
+} from '../devices/device-session-store';
 import type {
   CreateMapRuleInput,
   DaemonStatus,
@@ -265,6 +269,13 @@ export class TraceLocalDaemon {
     const controlServer = this.controlServer;
     const mobileCaServer = this.mobileCaServer;
     const proxy = this.proxy;
+
+    if (mobileCaServer && this.deviceSessions.size > 0) {
+      this.deviceSessions.requestDisconnectAll();
+      this.broadcastEvent('devices-changed', { devices: this.deviceSessions.list() });
+      await this.waitForDeviceDisconnects(DEFAULT_DEVICE_HEARTBEAT_MS + 1_500);
+    }
+
     this.controlServer = undefined;
     this.mobileCaServer = undefined;
     this.proxy = undefined;
@@ -287,6 +298,13 @@ export class TraceLocalDaemon {
     if (proxy) await proxy.stop();
     this.controlPort = 0;
     this.mobileCaPort = 0;
+  }
+
+  private async waitForDeviceDisconnects(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.deviceSessions.size > 0 && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
   }
 
   private async refreshProxyRules(): Promise<void> {
@@ -442,7 +460,12 @@ export class TraceLocalDaemon {
       const session = this.deviceSessions.connect(pairingId, { deviceId, name, platform });
       if (!session) { sendJson(response, 401, { error: 'pairing_not_authorized' }); return; }
       this.broadcastEvent('devices-changed', { devices: this.deviceSessions.list() });
-      sendJson(response, 201, { session, heartbeatIntervalMs: 10000, staleAfterMs: 45000, restoreRoutingOnDisconnect: true });
+      sendJson(response, 201, {
+        session,
+        heartbeatIntervalMs: DEFAULT_DEVICE_HEARTBEAT_MS,
+        staleAfterMs: DEFAULT_DEVICE_STALE_MS,
+        restoreRoutingOnDisconnect: true,
+      });
       return;
     }
 

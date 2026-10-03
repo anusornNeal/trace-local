@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-export const DEFAULT_DEVICE_STALE_MS = 45_000;
+export const DEFAULT_DEVICE_HEARTBEAT_MS = 3_000;
+export const DEFAULT_DEVICE_STALE_MS = 15_000;
 
 export interface DeviceIdentity {
   deviceId: string;
@@ -76,7 +77,7 @@ export class DeviceSessionStore {
       session: { ...session },
       disconnectRequested: session.disconnectRequested,
       restoreRouting: session.disconnectRequested,
-      heartbeatIntervalMs: 10_000,
+      heartbeatIntervalMs: DEFAULT_DEVICE_HEARTBEAT_MS,
       staleAfterMs: this.staleAfterMs,
     };
   }
