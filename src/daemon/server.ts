@@ -407,7 +407,8 @@ export class TraceLocalDaemon {
         return;
       }
 
-      this.deviceSessions.authorizePairing(pairing.pairingId, pairing.expiresAt);
+      const sessionAuthorizationExpiresAt = Date.now() + 10 * 60 * 1000;
+      this.deviceSessions.authorizePairing(pairing.pairingId, sessionAuthorizationExpiresAt);
 
       const metadata = this.caMetadata ?? (await this.caManager.metadata());
       this.caMetadata = metadata;
@@ -424,8 +425,10 @@ export class TraceLocalDaemon {
         desktopId: this.desktopId(metadata.fingerprint256),
         proxyAddress: lanAddress + ':' + proxyPort,
         caFingerprint256: metadata.fingerprint256,
+        apiBaseUrl: 'http://' + lanAddress + ':' + this.mobileCaPort,
+        caDownloadUrl: 'http://' + lanAddress + ':' + this.mobileCaPort + '/ca/' + this.caTokenServer.createToken().token,
         issuedAt: pairing.createdAt,
-        expiresAt: pairing.expiresAt,
+        expiresAt: sessionAuthorizationExpiresAt,
       });
       return;
     }

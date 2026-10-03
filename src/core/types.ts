@@ -115,6 +115,8 @@ export interface PairingPayloadV1 {
   desktopId: string;
   proxyAddress: string;
   caFingerprint256: string;
+  apiBaseUrl: string;
+  caDownloadUrl: string;
   issuedAt: number;
   expiresAt: number;
 }
