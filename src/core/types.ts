@@ -101,6 +101,7 @@ export type PairingProtocolVersion = 1;
 export interface PairingSetupResponse {
   protocolVersion: PairingProtocolVersion;
   url: string;
+  deepLink: string;
   qrSvg: string;
   expiresAt: number;
   ttlSeconds: number;

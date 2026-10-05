@@ -44,11 +44,13 @@ export interface TraceLocalDaemonOptions {
   controlHost?: string;
   controlPort?: number;
   proxyPort?: number;
+  mobileCaPort?: number;
   maxSessions?: number;
   maxBodyPreviewBytes?: number;
   dataDir?: string;
   allowRemote?: boolean;
   additionalTrustedCaCerts?: string[];
+  startupWarnings?: string[];
 }
 
 function parseNonNegativeInt(value: string | undefined, fallback: number): number {
@@ -166,7 +168,7 @@ export class TraceLocalDaemon {
   private controlPort = 0;
   private mobileCaPort = 0;
   private caMetadata?: CertificateAuthorityMetadata;
-  private startupWarnings: string[] = [];
+  private startupWarnings: string[];
   private readonly eventClients = new Set<http.ServerResponse>();
   private startPromise?: Promise<DaemonStatus>;
   private stopPromise?: Promise<void>;
@@ -174,6 +176,7 @@ export class TraceLocalDaemon {
 
   constructor(private readonly options: TraceLocalDaemonOptions = {}) {
     this.dataDir = options.dataDir ?? defaultTraceLocalDataDir();
+    this.startupWarnings = [...(options.startupWarnings ?? [])];
     this.store = new SessionStore(options.maxSessions ?? 500);
     this.rules = new MapRuleStore();
     this.caManager = new CertificateAuthorityManager(this.dataDir);
@@ -443,6 +446,7 @@ export class TraceLocalDaemon {
       return;
     }
 
+    const requestedPort = this.options.mobileCaPort ?? 0;
     const server = http.createServer((request, response) => {
       void this.handleMobileCaRequest(request, response).catch((error) => {
         if (!response.headersSent) {
@@ -457,13 +461,14 @@ export class TraceLocalDaemon {
     try {
       await new Promise<void>((resolve, reject) => {
         server.once('error', reject);
-        server.listen(0, '0.0.0.0', () => resolve());
+        server.listen(requestedPort, '0.0.0.0', () => resolve());
       });
       this.mobileCaServer = server;
       this.mobileCaPort = (server.address() as AddressInfo).port;
     } catch (error) {
       this.mobileCaPort = 0;
-      this.startupWarnings.push(`Mobile CA setup could not bind to the LAN: ${error instanceof Error ? error.message : String(error)}`);
+      const portLabel = requestedPort > 0 ? ' port ' + requestedPort : '';
+      this.startupWarnings.push('Mobile pairing could not bind to the LAN' + portLabel + ': ' + (error instanceof Error ? error.message : String(error)));
       await closeHttpServer(server).catch(() => undefined);
     }
   }
@@ -675,11 +680,13 @@ export class TraceLocalDaemon {
 
       const pairing = this.pairingTokens.create();
       const pairingUrl = 'http://' + lanAddress + ':' + this.mobileCaPort + '/pair/' + pairing.token + '?v=' + PAIRING_PROTOCOL_VERSION;
-      const qrSvg = await QRCode.toString(pairingUrl, { type: 'svg', errorCorrectionLevel: 'M', margin: 2, width: 240 });
+      const deepLink = 'tracelocal://pair?url=' + encodeURIComponent(pairingUrl);
+      const qrSvg = await QRCode.toString(deepLink, { type: 'svg', errorCorrectionLevel: 'M', margin: 2, width: 240 });
 
       sendJson(response, 201, {
         protocolVersion: PAIRING_PROTOCOL_VERSION,
         url: pairingUrl,
+        deepLink,
         qrSvg,
         expiresAt: pairing.expiresAt,
         ttlSeconds: Math.max(0, Math.floor((pairing.expiresAt - Date.now()) / 1000)),
@@ -857,6 +864,7 @@ async function runStandalone(): Promise<void> {
     controlHost: process.env.TRACELOCAL_CONTROL_HOST,
     controlPort: parseNonNegativeInt(process.env.TRACELOCAL_CONTROL_PORT, 4040),
     proxyPort: parseNonNegativeInt(process.env.TRACELOCAL_PROXY_PORT, 8888),
+    mobileCaPort: parseNonNegativeInt(process.env.TRACELOCAL_MOBILE_PORT, 8889),
     maxSessions: parseNonNegativeInt(process.env.TRACELOCAL_MAX_SESSIONS, 500),
     maxBodyPreviewBytes: parseNonNegativeInt(
       process.env.TRACELOCAL_BODY_PREVIEW_BYTES,

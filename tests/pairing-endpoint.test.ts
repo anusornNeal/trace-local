@@ -41,6 +41,10 @@ describe('secure pairing endpoint', () => {
     assert.match(pairing.qrSvg, /<path /);
 
     const url = new URL(pairing.url);
+    const deepLink = new URL(pairing.deepLink);
+    assert.equal(deepLink.protocol, 'tracelocal:');
+    assert.equal(deepLink.host, 'pair');
+    assert.equal(deepLink.searchParams.get('url'), pairing.url);
     assert.match(url.pathname, /^\/pair\/[A-Za-z0-9_-]{40,}$/);
     assert.equal(url.searchParams.get('v'), '1');
     assert.equal([...url.searchParams.keys()].length, 1);

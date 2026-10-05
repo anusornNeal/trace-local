@@ -728,7 +728,7 @@
     });
 
     $('#copyPairingLink').addEventListener('click', () => {
-      if (state.pairingToken) copyText(state.pairingToken.url);
+      if (state.pairingToken) copyText(state.pairingToken.deepLink || state.pairingToken.url);
     });
   }
 

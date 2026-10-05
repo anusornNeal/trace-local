@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import { TraceLocalDaemon } from './daemon/server';
+import { ensureWindowsFirewallReady } from './platform/windows-firewall';
 
 let mainWindow: BrowserWindow | null = null;
 let daemon: TraceLocalDaemon | null = null;
@@ -47,14 +48,20 @@ function isAddressInUse(error: unknown): boolean {
   );
 }
 
-async function startDesktopDaemon(proxyPort: number): Promise<TraceLocalDaemon> {
+async function startDesktopDaemon(
+  proxyPort: number,
+  mobileCaPort: number,
+  startupWarnings: string[] = [],
+): Promise<TraceLocalDaemon> {
   const dataDir = process.env.TRACELOCAL_DATA_DIR?.trim();
   const candidate = new TraceLocalDaemon({
     controlHost: '127.0.0.1',
     controlPort: portFromEnv('TRACELOCAL_CONTROL_PORT') ?? 0,
     proxyPort,
+    mobileCaPort,
     dataDir: dataDir ? path.resolve(dataDir) : undefined,
     allowRemote: true,
+    startupWarnings,
   });
   await candidate.start();
   return candidate;
@@ -64,9 +71,26 @@ async function createMainWindow(): Promise<void> {
   if (!daemon) {
     const configuredProxyPort = portFromEnv('TRACELOCAL_PROXY_PORT');
     const preferredProxyPort = configuredProxyPort ?? 8888;
+    const configuredMobilePort = portFromEnv('TRACELOCAL_MOBILE_PORT');
+    const preferredMobilePort = configuredMobilePort ?? 8889;
+    const firewallScriptPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'installer', 'windows-firewall.ps1')
+      : path.resolve(__dirname, '..', 'scripts', 'installer', 'windows-firewall.ps1');
+    const firewall = await ensureWindowsFirewallReady({
+      programPath: process.execPath,
+      scriptPath: firewallScriptPath,
+      proxyPort: preferredProxyPort,
+      pairingPort: preferredMobilePort,
+      skip:
+        e2eMode ||
+        process.env.TRACELOCAL_SKIP_FIREWALL === '1' ||
+        preferredProxyPort === 0 ||
+        preferredMobilePort === 0,
+    });
+    const startupWarnings = firewall.warning ? [firewall.warning] : [];
 
     try {
-      daemon = await startDesktopDaemon(preferredProxyPort);
+      daemon = await startDesktopDaemon(preferredProxyPort, preferredMobilePort, startupWarnings);
     } catch (error) {
       if (isAddressInUse(error)) {
         throw new Error(`Proxy port ${preferredProxyPort} is already in use. Close the conflicting app or set TRACELOCAL_PROXY_PORT to another stable port.`);

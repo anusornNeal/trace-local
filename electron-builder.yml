@@ -5,6 +5,10 @@ copyright: Copyright © 2026 Trace Local
 directories:
   output: release
 
+extraResources:
+  - from: scripts/installer/windows-firewall.ps1
+    to: installer/windows-firewall.ps1
+
 files:
   - dist/**/*
   - package.json
@@ -21,9 +25,10 @@ win:
 
 nsis:
   oneClick: false
-  perMachine: false
+  perMachine: true
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
+  include: scripts/installer/windows-firewall.nsh
 
 mac:
   target:

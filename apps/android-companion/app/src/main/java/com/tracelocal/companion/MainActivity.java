@@ -251,19 +251,31 @@ public final class MainActivity extends Activity {
         if (intent == null || intent.getData() == null) {
             return;
         }
-        Uri data = intent.getData();
-        if ("tracelocal".equalsIgnoreCase(data.getScheme()) && "pair".equalsIgnoreCase(data.getHost())) {
-            String url = data.getQueryParameter("url");
-            if (url != null) {
-                redeemPairing(url);
-            }
-        }
+        redeemPairing(intent.getData().toString());
     }
 
-    private void redeemPairing(String url) {
+    private String unwrapPairingUrl(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) return null;
+
+        Uri candidate = Uri.parse(trimmed);
+        if ("tracelocal".equalsIgnoreCase(candidate.getScheme()) && "pair".equalsIgnoreCase(candidate.getHost())) {
+            String nested = candidate.getQueryParameter("url");
+            return nested == null || nested.trim().isEmpty() ? null : nested.trim();
+        }
+
+        if ("http".equalsIgnoreCase(candidate.getScheme()) || "https".equalsIgnoreCase(candidate.getScheme())) {
+            return trimmed;
+        }
+        return null;
+    }
+
+    private void redeemPairing(String value) {
         if (VpnLifecycle.CURRENT.snapshot().active || pairingBusy) return;
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            setStatus("Invalid pairing link", "Expected the LAN pairing URL from Trace Local.");
+        String url = unwrapPairingUrl(value);
+        if (url == null) {
+            setStatus("Invalid pairing link", "Expected a Trace Local pairing QR or LAN pairing URL.");
             return;
         }
 

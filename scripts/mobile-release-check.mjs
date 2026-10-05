@@ -64,6 +64,9 @@ requireText(iosTunnel, '/disconnected', 'iOS disconnect acknowledgement API');
 requireText(deviceStore, 'DEFAULT_DEVICE_HEARTBEAT_MS = 3_000', 'Device lifecycle');
 requireText(deviceStore, 'DEFAULT_DEVICE_STALE_MS = 15_000', 'Device lifecycle');
 requireText(server, 'waitForDeviceDisconnects', 'Graceful desktop shutdown');
+requireText(server, "const deepLink = 'tracelocal://pair?url='", 'Desktop companion deep link QR');
+requireText(androidMain, 'unwrapPairingUrl', 'Android companion deep-link handling');
+requireText(iosStore, 'url.scheme?.lowercased() == "tracelocal"', 'iOS companion deep-link handling');
 
 requireText(desktopHtml, 'Mobile companions', 'Desktop mobile UI');
 requireText(desktopHtml, 'Advanced manual CA setup', 'Desktop advanced fallback');
@@ -95,6 +98,8 @@ const report = {
   },
   desktop: {
     serverGeneratedPairingQrOnly: true,
+    companionDeepLinkQr: true,
+    stablePairingPort: 8889,
     legacyManualCaFallback: 'short-lived-link',
   },
   automation: {
