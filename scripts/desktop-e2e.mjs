@@ -40,16 +40,19 @@ function closeServer(server) {
 async function reservePorts() {
   const control = net.createServer();
   const proxy = net.createServer();
+  const mobile = net.createServer();
   const debuggerServer = net.createServer();
   await listen(control, { host: '127.0.0.1', port: 0 });
   await listen(proxy, { host: '127.0.0.1', port: 0 });
+  await listen(mobile, { host: '0.0.0.0', port: 0 });
   await listen(debuggerServer, { host: '127.0.0.1', port: 0 });
 
   const controlPort = control.address().port;
   const proxyPort = proxy.address().port;
+  const mobilePort = mobile.address().port;
   const debuggerPort = debuggerServer.address().port;
-  await Promise.all([closeServer(control), closeServer(proxy), closeServer(debuggerServer)]);
-  return { controlPort, proxyPort, debuggerPort };
+  await Promise.all([closeServer(control), closeServer(proxy), closeServer(mobile), closeServer(debuggerServer)]);
+  return { controlPort, proxyPort, mobilePort, debuggerPort };
 }
 
 function waitForReady(child, timeoutMs = 20_000) {
@@ -252,52 +255,18 @@ async function requestJson(baseUrl, requestPath, init) {
   return text ? JSON.parse(text) : null;
 }
 
-async function pairDevice(controlUrl, platform) {
-  const setup = await requestJson(controlUrl, '/api/pairing/token', { method: 'POST' });
-  assert.ok(setup.qrSvg, 'Pairing must return a real QR');
-  const pairingUrl = new URL(setup.url);
-  const pairing = await requestJson(pairingUrl.origin, pairingUrl.pathname + pairingUrl.search);
-  const connected = await requestJson(pairing.apiBaseUrl, '/device/session', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      pairingId: pairing.pairingId,
-      deviceId: `desktop-e2e-${platform}`,
-      name: `Simulated ${platform} companion`,
-      platform,
-    }),
-  });
-  assert.equal(connected.restoreRoutingOnDisconnect, true);
-  assert.equal(connected.session.platform, platform);
-  assert.equal(connected.heartbeatIntervalMs, 3_000);
-  assert.equal(connected.staleAfterMs, 15_000);
-  return {
-    apiBaseUrl: pairing.apiBaseUrl,
-    sessionPath: `/device/session/${encodeURIComponent(connected.session.sessionId)}`,
-    sessionId: connected.session.sessionId,
-  };
-}
+async function createCaDownload(controlUrl) {
+  const setup = await requestJson(controlUrl, '/api/ca/mobile-token', { method: 'POST' });
+  assert.ok(setup.qrSvg, 'CA setup must return a real QR');
+  assert.match(setup.qrSvg, /<svg[\s>]/);
+  assert.match(setup.url, /^http:\/\//);
 
-async function heartbeatDevice(device) {
-  return requestJson(device.apiBaseUrl, `${device.sessionPath}/heartbeat`, { method: 'POST' });
-}
-
-async function acknowledgeDevice(device) {
-  await requestJson(device.apiBaseUrl, `${device.sessionPath}/disconnected`, { method: 'POST' });
-}
-
-async function observeShutdownDisconnect(device) {
-  const deadline = Date.now() + 8_000;
-  while (Date.now() < deadline) {
-    const heartbeat = await heartbeatDevice(device);
-    if (heartbeat.disconnectRequested) {
-      assert.equal(heartbeat.restoreRouting, true);
-      await acknowledgeDevice(device);
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error('Desktop shutdown did not request companion routing restoration');
+  const response = await fetch(setup.url, { signal: AbortSignal.timeout(5_000) });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-disposition') || '', /tracelocal/i);
+  const certificate = await response.text();
+  assert.match(certificate, /BEGIN CERTIFICATE/);
+  return setup;
 }
 
 async function waitForSession(baseUrl, predicate, timeoutMs = 5_000) {
@@ -335,9 +304,14 @@ const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-desktop-e2e-')
 const dataDir = path.join(tempRoot, 'data');
 const electronUserDataDir = path.join(tempRoot, 'electron-user-data');
 const mappedFile = path.join(tempRoot, 'mapped.json');
+const unauthorizedFile = path.join(tempRoot, 'unauthorized.txt');
+const oversizedFile = path.join(tempRoot, 'oversized.txt');
+const missingFile = path.join(tempRoot, 'missing.txt');
 await mkdir(dataDir, { recursive: true });
 await mkdir(electronUserDataDir, { recursive: true });
 await writeFile(mappedFile, '{"source":"map-local-e2e"}\n', 'utf8');
+await writeFile(unauthorizedFile, 'not-authorized', 'utf8');
+await writeFile(oversizedFile, 'x'.repeat(1024 * 1024 + 1), 'utf8');
 
 const upstreamRequests = [];
 const upstream = http.createServer((request, response) => {
@@ -354,7 +328,8 @@ let debuggerPort;
 try {
   await listen(upstream, { host: '127.0.0.1', port: 0 });
   const upstreamPort = upstream.address().port;
-  ({ controlPort, proxyPort, debuggerPort } = await reservePorts());
+  const reserved = await reservePorts();
+  ({ controlPort, proxyPort, debuggerPort } = reserved);
 
   electron = spawn(electronPath, [`--inspect=127.0.0.1:${debuggerPort}`, projectRoot], {
     cwd: projectRoot,
@@ -365,6 +340,7 @@ try {
       TRACELOCAL_ELECTRON_USER_DATA_DIR: electronUserDataDir,
       TRACELOCAL_CONTROL_PORT: String(controlPort),
       TRACELOCAL_PROXY_PORT: String(proxyPort),
+      TRACELOCAL_MOBILE_PORT: String(reserved.mobilePort),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -424,6 +400,81 @@ try {
   const ruleSelector = `[data-rule="${ruleId}"]`;
   const sessionSelector = `[data-session="${captured.id}"]`;
   await waitForRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}) && document.querySelector(${JSON.stringify(sessionSelector)})`);
+
+  const oversizedRule = await requestJson(controlUrl, '/api/rules', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      target: 'path',
+      pattern: '/desktop-e2e-oversized',
+      filePath: oversizedFile,
+      enabled: false,
+    }),
+  });
+  const missingRule = await requestJson(controlUrl, '/api/rules', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      target: 'path',
+      pattern: '/desktop-e2e-missing',
+      filePath: missingFile,
+      enabled: false,
+    }),
+  });
+  assert.ok(oversizedRule.id && missingRule.id);
+
+  const allowedRead = await evaluateRenderer(
+    debuggerPort,
+    `window.traceLocalDesktop.readTextFile(${JSON.stringify(mappedFile)})`,
+  );
+  assert.equal(allowedRead, '{"source":"map-local-e2e"}\n');
+
+  const unauthorizedRead = await evaluateRenderer(
+    debuggerPort,
+    `(async () => { try { await window.traceLocalDesktop.readTextFile(${JSON.stringify(unauthorizedFile)}); return { ok: true }; } catch (error) { return { ok: false, message: error.message }; } })()`,
+  );
+  assert.equal(unauthorizedRead.ok, false);
+  assert.match(unauthorizedRead.message, /not selected by a Map Local rule/i);
+
+  const oversizedRead = await evaluateRenderer(
+    debuggerPort,
+    `(async () => { try { await window.traceLocalDesktop.readTextFile(${JSON.stringify(oversizedFile)}); return { ok: true }; } catch (error) { return { ok: false, message: error.message }; } })()`,
+  );
+  assert.equal(oversizedRead.ok, false);
+  assert.match(oversizedRead.message, /smaller than 1 MiB/i);
+
+  const missingRead = await evaluateRenderer(
+    debuggerPort,
+    `(async () => { try { await window.traceLocalDesktop.readTextFile(${JSON.stringify(missingFile)}); return { ok: true }; } catch (error) { return { ok: false, message: error.message }; } })()`,
+  );
+  assert.equal(missingRead.ok, false);
+  assert.match(missingRead.message, /ENOENT|no such file/i);
+
+  const oversizedWrite = await evaluateRenderer(
+    debuggerPort,
+    `(async () => { try { await window.traceLocalDesktop.writeTextFile(${JSON.stringify(mappedFile)}, 'x'.repeat(1024 * 1024 + 1)); return { ok: true }; } catch (error) { return { ok: false, message: error.message }; } })()`,
+  );
+  assert.equal(oversizedWrite.ok, false);
+  assert.match(oversizedWrite.message, /exceeds 1 MiB/i);
+
+  await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}).click()`);
+  await waitForRenderer(debuggerPort, `document.querySelector('#ruleFileContent').value.includes('map-local-e2e')`);
+  const editedBody = '{"source":"edited-ui"}\n';
+  await evaluateRenderer(debuggerPort, `(() => {
+    document.querySelector('#ruleName').value = 'Edited E2E rule';
+    document.querySelector('#ruleDelay').value = '15';
+    document.querySelector('#ruleFileContent').value = ${JSON.stringify(editedBody)};
+    document.querySelector('#ruleForm').requestSubmit();
+    return true;
+  })()`);
+  await waitForRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)})?.textContent.includes('Edited E2E rule')`);
+
+  const editedRule = (await requestJson(controlUrl, '/api/rules')).rules.find((rule) => rule.id === ruleId);
+  assert.equal(editedRule.name, 'Edited E2E rule');
+  assert.equal(editedRule.delayMs, 15);
+  const editedMappedResponse = await requestViaProxy(proxyPort, mappedUrl);
+  assert.equal(editedMappedResponse.statusCode, 203);
+  assert.equal(editedMappedResponse.body, editedBody);
   await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(sessionSelector)}).click()`);
   await waitForRenderer(debuggerPort, "document.querySelector('#detailRequest').textContent.includes('x-tracelocal-e2e')");
   await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}).querySelector('[data-toggle]').click()`);
@@ -432,51 +483,33 @@ try {
   assert.equal(disabledRule.enabled, false, 'Renderer rule toggle did not persist');
   await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}).querySelector('[data-toggle]').click()`);
   await waitForRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}).querySelector('[data-toggle]').classList.contains('on')`);
+  await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(ruleSelector)}).querySelector('[data-delete]').click()`);
+  await waitForRenderer(debuggerPort, `!document.querySelector(${JSON.stringify(ruleSelector)})`);
+  const deletedRule = (await requestJson(controlUrl, '/api/rules')).rules.find((rule) => rule.id === ruleId);
+  assert.equal(deletedRule, undefined, 'Renderer rule delete did not persist');
 
-  const android = await pairDevice(controlUrl, 'android');
-  const ios = await pairDevice(controlUrl, 'ios');
-  assert.equal((await requestJson(controlUrl, '/api/devices')).devices.length, 2);
-  assert.equal((await heartbeatDevice(android)).disconnectRequested, false);
-  assert.equal((await heartbeatDevice(ios)).disconnectRequested, false);
+  const mobileSetup = await createCaDownload(controlUrl);
+  assert.equal(new URL(mobileSetup.url).port, String(reserved.mobilePort));
+  const mobileStatus = await requestJson(controlUrl, '/api/ca/mobile-status');
+  assert.equal(mobileStatus.proxyAddress.endsWith(':' + proxyPort), true);
 
-  const deviceSelector = `[data-device="${android.sessionId}"]`;
-  await waitForRenderer(debuggerPort, `document.querySelectorAll('#deviceList [data-device]').length === 2`);
-  await evaluateRenderer(debuggerPort, `document.querySelector(${JSON.stringify(deviceSelector)}).querySelector('[data-device-disconnect]').click()`);
-  await waitForRenderer(debuggerPort, `document.querySelector(${JSON.stringify(deviceSelector)}).querySelector('[data-device-disconnect]').disabled`);
-  const androidDisconnect = await heartbeatDevice(android);
-  assert.equal(androidDisconnect.disconnectRequested, true);
-  assert.equal(androidDisconnect.restoreRouting, true);
-  assert.equal((await heartbeatDevice(ios)).disconnectRequested, false);
-  await acknowledgeDevice(android);
-  assert.equal((await requestJson(controlUrl, '/api/devices')).devices.length, 1);
+  await evaluateRenderer(debuggerPort, "document.querySelector('#generateQr').click()");
+  await waitForRenderer(
+    debuggerPort,
+    "!document.querySelector('#mobileQrSection').hidden && document.querySelector('#mobileQrSvg svg')",
+  );
+  const renderedCaLink = await evaluateRenderer(
+    debuggerPort,
+    "document.querySelector('#mobileCaLink').textContent",
+  );
+  assert.match(renderedCaLink, /^http:\/\//);
 
-  await requestJson(controlUrl, '/api/devices', { method: 'DELETE' });
-  const iosDisconnect = await heartbeatDevice(ios);
-  assert.equal(iosDisconnect.disconnectRequested, true);
-  assert.equal(iosDisconnect.restoreRouting, true);
-  await acknowledgeDevice(ios);
-  assert.equal((await requestJson(controlUrl, '/api/devices')).devices.length, 0);
-
-  const returningAndroid = await pairDevice(controlUrl, 'android');
-  const returningIos = await pairDevice(controlUrl, 'ios');
-  assert.notEqual(returningAndroid.sessionId, android.sessionId);
-  assert.notEqual(returningIos.sessionId, ios.sessionId);
-  const mobilePort = new URL(returningAndroid.apiBaseUrl).port;
-  assert.equal(new URL(returningIos.apiBaseUrl).port, mobilePort);
-
-  const shutdownResults = await Promise.allSettled([
-    observeShutdownDisconnect(returningAndroid),
-    observeShutdownDisconnect(returningIos),
-    stopElectron(electron, debuggerPort),
-  ]);
-  for (const result of shutdownResults) {
-    if (result.status === 'rejected') throw result.reason;
-  }
+  await stopElectron(electron, debuggerPort);
   electron = undefined;
 
   await assertPortReleased(proxyPort);
   await assertPortReleased(controlPort, '127.0.0.1');
-  await assertPortReleased(Number(mobilePort));
+  await assertPortReleased(reserved.mobilePort);
   await assertPortReleased(debuggerPort, '127.0.0.1');
 
   console.log(JSON.stringify({
@@ -485,16 +518,19 @@ try {
     controlPort,
     capturedSessionId: captured.id,
     mappedSessionId: mappedSession.id,
-    renderer: { trafficDetail: true, ruleTogglePersisted: true, deviceDisconnect: true },
+    renderer: {
+      trafficDetail: true,
+      ruleEditAndFileWrite: true,
+      editorSecurity: true,
+      ruleTogglePersisted: true,
+      ruleDeletePersisted: true,
+      caDownloadQr: true,
+    },
     upstreamRequests,
-    mobileLifecycle: {
-      clients: 'simulated Android/iOS API clients; no physical VPN or CA verification',
-      pairedDevices: 2,
-      singleDeviceDisconnect: true,
-      disconnectAll: true,
-      freshQrReconnect: true,
-      gracefulShutdownAcknowledged: true,
-      repeatedQuitWaitsForCleanup: true,
+    mobileSetup: {
+      manualProxy: true,
+      caDownloadQr: true,
+      caDownloadVerified: true,
       mobilePortReleased: true,
     },
     stderr: stderr.trim() || undefined,

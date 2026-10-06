@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-describe('Mobile CA endpoints', () => {
+describe('Mobile CA download endpoints', () => {
   let daemon: TraceLocalDaemon;
   let controlPort: number;
 
@@ -15,6 +15,7 @@ describe('Mobile CA endpoints', () => {
       controlHost: '127.0.0.1',
       controlPort: 0,
       proxyPort: 0,
+      mobileCaPort: 0,
       dataDir,
     });
     const status = await daemon.start();
@@ -25,125 +26,82 @@ describe('Mobile CA endpoints', () => {
     await daemon.stop();
   });
 
-  it('creates mobile token', async () => {
+  async function createDownload() {
     const response = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-token`, {
       method: 'POST',
     });
-
     assert.equal(response.status, 201);
-    const data = await response.json();
+    return response.json() as Promise<any>;
+  }
+
+  it('creates a short-lived CA URL and real QR SVG', async () => {
+    const data = await createDownload();
     assert.ok(data.token);
-    assert.ok(data.url);
+    assert.match(data.url, /^http:\/\//);
+    assert.match(data.qrSvg, /<svg[\s>]/);
     assert.ok(data.expiresAt);
     assert.ok(data.ttlSeconds > 0);
     assert.ok(data.proxyAddress);
     assert.ok(Array.isArray(data.lanAddresses));
   });
 
-  it('serves CA cert with valid token', async () => {
-    const tokenResponse = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-token`, {
-      method: 'POST',
-    });
-    const { token } = await tokenResponse.json();
+  it('serves the CA certificate from the QR URL', async () => {
+    const data = await createDownload();
+    const response = await fetch(data.url);
 
-    const certResponse = await fetch(`http://127.0.0.1:${controlPort}/ca/${token}`);
-    assert.equal(certResponse.status, 200);
-    assert.equal(certResponse.headers.get('content-type'), 'application/x-pem-file; charset=utf-8');
-    assert.equal(certResponse.headers.get('content-disposition'), 'attachment; filename="tracelocal.crt"');
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'application/x-pem-file; charset=utf-8');
+    assert.match(response.headers.get('content-disposition') || '', /tracelocal.*\.crt/i);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
 
-    const cert = await certResponse.text();
-    assert.ok(cert.includes('BEGIN CERTIFICATE'));
-    assert.ok(cert.includes('END CERTIFICATE'));
+    const cert = await response.text();
+    assert.match(cert, /BEGIN CERTIFICATE/);
+    assert.match(cert, /END CERTIFICATE/);
   });
 
-  it('rejects invalid token', async () => {
-    const response = await fetch(`http://127.0.0.1:${controlPort}/ca/invalid-token-12345`);
-    assert.equal(response.status, 404);
-    const text = await response.text();
-    assert.ok(text.includes('Invalid or expired'));
+  it('rejects invalid or expired CA download tokens', async () => {
+    const data = await createDownload();
+    const origin = new URL(data.url).origin;
+
+    const invalid = await fetch(origin + '/ca/invalid-token-12345');
+    assert.equal(invalid.status, 404);
+
+    const tokenObj = (daemon.caTokenServer as any).tokens.get(data.token);
+    assert.ok(tokenObj);
+    tokenObj.expiresAt = Date.now() - 1;
+
+    const expired = await fetch(data.url);
+    assert.equal(expired.status, 404);
   });
 
-  it('returns mobile status', async () => {
+  it('returns manual mobile setup status from active proxy clients', async () => {
     const response = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-status`);
     assert.equal(response.status, 200);
 
-    const data = await response.json();
-    assert.ok(typeof data.activeClients === 'number');
+    const data = await response.json() as any;
+    assert.equal(typeof data.activeClients, 'number');
     assert.ok(data.activeClients >= 0);
+    assert.ok(data.proxyAddress);
     assert.ok(Array.isArray(data.lanAddresses));
+    assert.equal('devices' in data, false);
   });
 
-  it('tracks client connections', async () => {
-    const tokenResponse = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-token`, {
-      method: 'POST',
-    });
-    const { token } = await tokenResponse.json();
+  it('creates unique QR URLs', async () => {
+    const first = await createDownload();
+    const second = await createDownload();
 
-    const beforeStatus = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-status`);
-    const beforeData = await beforeStatus.json();
-    const beforeCount = beforeData.activeClients;
-
-    await fetch(`http://127.0.0.1:${controlPort}/ca/${token}`);
-
-    const afterStatus = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-status`);
-    const afterData = await afterStatus.json();
-    const afterCount = afterData.activeClients;
-
-    assert.ok(afterCount >= beforeCount);
+    assert.notEqual(first.token, second.token);
+    assert.notEqual(first.url, second.url);
+    assert.notEqual(first.qrSvg, second.qrSvg);
   });
 
-  it('rejects expired token', async () => {
-    const tokenResponse = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-token`, {
-      method: 'POST',
-    });
-    const { token } = await tokenResponse.json();
-
-    // Manually expire the token
-    const tokenServer = daemon.caTokenServer;
-    const tokenObj = (tokenServer as any).tokens.get(token);
-    assert.ok(tokenObj);
-    tokenObj.expiresAt = Date.now() - 1000;
-
-    const certResponse = await fetch(`http://127.0.0.1:${controlPort}/ca/${token}`);
-    assert.equal(certResponse.status, 404);
-  });
-
-  it('creates unique tokens on multiple requests', async () => {
-    const response1 = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-token`, {
-      method: 'POST',
-    });
-    const data1 = await response1.json();
-
-    const response2 = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-token`, {
-      method: 'POST',
-    });
-    const data2 = await response2.json();
-
-    assert.notEqual(data1.token, data2.token);
-    assert.notEqual(data1.url, data2.url);
-  });
-
-  it('includes LAN addresses in token response', async () => {
-    const response = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-token`, {
-      method: 'POST',
-    });
-    const data = await response.json();
-
+  it('includes LAN interface metadata in the QR response', async () => {
+    const data = await createDownload();
     assert.ok(Array.isArray(data.lanAddresses));
     for (const addr of data.lanAddresses) {
       assert.ok(addr.address);
       assert.ok(addr.family === 'IPv4' || addr.family === 'IPv6');
       assert.ok(addr.interface);
     }
-  });
-
-  it('sets cache-control header on CA cert response', async () => {
-    const tokenResponse = await fetch(`http://127.0.0.1:${controlPort}/api/ca/mobile-token`, {
-      method: 'POST',
-    });
-    const { token } = await tokenResponse.json();
-
-    const certResponse = await fetch(`http://127.0.0.1:${controlPort}/ca/${token}`);
-    assert.equal(certResponse.headers.get('cache-control'), 'no-store');
   });
 });

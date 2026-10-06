@@ -18,46 +18,32 @@ npm run dev:daemon
 npm run dev:cli -- --help
 ```
 
-## Mobile companions
+## Mobile setup (no mobile app)
 
-For Android and iPhone, the intended product flow is:
+Trace Local follows the same basic mobile setup model as desktop debugging proxies such as Proxyman: the phone connects to the desktop proxy manually, and HTTPS interception requires manually installing the Trace Local CA.
 
-1. Open **Settings → Mobile companions** in Trace Local desktop.
-2. Click **Pair mobile device** and scan the short-lived QR in the companion app.
-3. On first use, install/trust the Trace Local CA using the OS flow and approve the VPN configuration.
-4. Tap **Connect**. Returning devices using the same trusted CA normally scan a fresh QR and connect without editing Wi-Fi proxy settings.
-5. Disconnect from the companion, desktop UI, or CLI. If the desktop disappears, the companion removes its VPN/proxy configuration after the bounded stale timeout so normal routing is restored.
+1. Open **Settings → Mobile setup** in Trace Local desktop.
+2. On the phone, edit the current Wi-Fi network and set its HTTP proxy to **Manual**.
+3. Enter the LAN host and port shown by Trace Local (default proxy port: `8888`).
+4. For HTTPS inspection, click **Show CA download QR** in Trace Local and scan it with the phone.
+5. Download and install/trust the CA using the operating-system certificate flow.
+6. Remove the Wi-Fi proxy and CA trust when debugging is finished.
 
-Normal mobile use does not require editing Wi-Fi proxy settings.
+The QR code is only a convenience for opening a short-lived CA download URL on the phone. It does **not** pair a device, install a mobile app, change Wi-Fi proxy settings, install the certificate, or grant certificate trust automatically.
 
-The QR is single-use and carries only a short-lived LAN pairing reference. The CA private key never leaves the desktop.
+No Trace Local Android or iOS companion app is required.
 
-Android uses the platform VPN HTTP proxy for proxy-aware HTTP/HTTPS traffic. iOS configures HTTP/HTTPS proxy settings inside its Network Extension without installing a default packet route. Apps that deliberately bypass the platform proxy are outside the current transparent-interception scope.
+### Mobile verification
 
-### Mobile release-candidate validation
-
-Run the checks supported on the current machine:
+Run the automated contract checks:
 
 ```bash
 npm run verify:mobile
 ```
 
-A release candidate is not considered physically validated until the platform matrix is executed on real hardware:
+Automated checks verify that the desktop exposes only the manual proxy + CA QR flow and that no companion/pairing product path is present. Real hardware is still required to validate Android/iPhone Wi-Fi proxy configuration, CA trust, Windows firewall reachability, and HTTPS capture for the target app.
 
-| Scenario | Windows automation | Physical Android | macOS + physical iPhone |
-| --- | --- | --- | --- |
-| Pairing contract / expiry / multi-device lifecycle | Automated | Confirm | Confirm |
-| First-use CA + VPN flow | Source/build checks | Required | Required |
-| Returning-user QR connect | Contract checks | Required | Required |
-| Desktop GUI / CLI disconnect | Automated server/CLI | Required | Required |
-| Graceful shutdown / desktop loss cleanup | Automated server lifecycle | Required | Required |
-| Sleep/wake, Wi-Fi/LAN/IP change | Not simulated | Required | Required |
-| HTTPS capture for target apps | Proxy regression tests | Required | Required |
-| iOS Xcode compile, signing, entitlement | Not available on Windows | — | Required |
-
-The matrix intentionally distinguishes implementation checks from hardware/signing verification; unavailable platform checks are never reported as passed.
-
-## Advanced/manual client configuration
+## Manual client configuration
 
 1. Open **Settings** and copy the proxy address.
 2. Configure the development browser, emulator, device, or app you control to use that HTTP/HTTPS proxy.
@@ -66,9 +52,9 @@ The matrix intentionally distinguishes implementation checks from hardware/signi
 
 Trace Local does not install trust certificates automatically and binds its control surface to loopback by default.
 
-The control and mobile listeners validate Host and browser-origin headers; body-bearing mutations require `application/json`. The proxy blocks forwarding to this daemon's control endpoint, including hostname aliases. Shutdown rejects new mutations and mobile sessions while allowing existing devices to acknowledge routing restoration.
+The control and CA-download listeners validate Host and browser-origin headers; body-bearing control mutations require `application/json`. The proxy blocks forwarding to this daemon's control endpoint, including hostname aliases.
 
-CA initialization is serialized across processes sharing the same data directory. If a process crashes while creating the CA, initialization fails with the `.ca-initialize.lock` path; remove that lock only after all Trace Local processes using that directory have stopped. An expired CA blocks new pairing with `503 ca_expired` and requires restarting Trace Local so its proxy and clients can use the regenerated identity together. Existing devices can still send heartbeats and acknowledge disconnects.
+CA initialization is serialized across processes sharing the same data directory. If a process crashes while creating the CA, initialization fails with the `.ca-initialize.lock` path; remove that lock only after all Trace Local processes using that directory have stopped. An expired CA blocks new CA-download tokens with `503 ca_expired` and requires restarting Trace Local so the proxy and clients use the regenerated identity together.
 
 ## Map Local
 
@@ -86,9 +72,7 @@ npm run audit:prod
 npm run e2e:desktop
 ```
 
-`e2e:desktop` launches the real Electron entry with temporary ports, Trace Local data, and Electron user data. It sends real proxy traffic, opens request details in the renderer, toggles a Map Local rule through the UI and verifies persistence, and disconnects a paired device through its rendered button.
-
-Simulated Android/iOS API clients pair, disconnect individually and together, and reconnect with fresh pairing references. The test requests quit twice through a temporary loopback main-process debugger, requires both clients to receive and acknowledge routing-restoration requests before exit, and checks that proxy/control/mobile/debugger ports are released. Forced termination fails verification. Mobile clients are simulated; this does not verify physical CA installation, VPN routing, or device UI.
+`e2e:desktop` launches the real Electron entry with temporary ports, Trace Local data, and Electron user data. It sends real proxy traffic, opens request details in the renderer, exercises Map Local create/edit/toggle/delete behavior, verifies response-file editing security, generates a real CA download QR through the desktop UI, downloads the certificate, and checks that proxy/control/CA-download/debugger ports are released on shutdown.
 
 The production audit is expected to report no high-severity vulnerabilities. The project pins `basic-ftp` 6.2.1 through an npm override because Mockttp's proxy dependency chain otherwise resolves an affected 5.x release.
 

@@ -36,7 +36,7 @@ function inspector() {
         '/api/status': { sessions: current.sessions.length, rules: current.rules.length, proxy: {} },
         '/api/sessions?limit=500': { sessions: current.sessions },
         '/api/rules': { rules: current.rules },
-        '/api/ca': {}, '/api/ca/mobile-status': { devices: current.devices, activeClients: current.devices.length },
+        '/api/ca': {}, '/api/ca/mobile-status': { activeClients: current.devices.length, proxyAddress: '192.168.1.10:8888', lanAddresses: [] },
       };
       assert.ok(url in data, 'Unexpected API request: ' + url);
       const snapshot = structuredClone(data[url]);
@@ -60,7 +60,7 @@ const session = (id: string) => ({
   host: 'example.test', path: '/' + id, url: 'http://example.test/' + id, startedAt: 1,
 });
 
-test('SSE reconnect resynchronizes missed clears, captures, rules and devices', async () => {
+test('SSE reconnect resynchronizes missed clears, captures, rules and mobile status', async () => {
   const ui = inspector();
   await tick();
   assert.equal(ui.elements.get('#caPath').textContent, '—');
@@ -74,7 +74,7 @@ test('SSE reconnect resynchronizes missed clears, captures, rules and devices', 
   await tick();
   assert.equal(ui.context.inspector.state.sessions[0].id, 'new');
   assert.equal(ui.context.inspector.state.selected, null);
-  assert.equal(ui.context.inspector.state.mobileStatus.devices[0].sessionId, 'new-device');
+  assert.equal(ui.context.inspector.state.mobileStatus.activeClients, 1);
   assert.equal(ui.context.inspector.state.connected, true);
 });
 
@@ -86,12 +86,10 @@ test('live events arriving during REST refresh survive stale snapshot completion
   const refresh = ui.context.inspector.loadBootstrap();
   ui.events.emit('sessions-cleared', { removed: 1 });
   ui.events.emit('session-added', { session: session('live') });
-  ui.events.emit('devices-changed', { devices: [{ sessionId: 'live-device', name: 'Phone' }] });
   ui.release();
   await refresh;
   assert.deepEqual(Array.from(ui.context.inspector.state.sessions, (entry: any) => entry.id), ['live']);
   assert.equal(ui.context.inspector.state.status.sessions, 1);
-  assert.equal(ui.context.inspector.state.mobileStatus.devices[0].sessionId, 'live-device');
 });
 
 test('an older bootstrap response cannot overwrite a newer reconnect snapshot', async () => {

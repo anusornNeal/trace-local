@@ -4,7 +4,7 @@ export interface WindowsFirewallOptions {
   programPath: string;
   scriptPath: string;
   proxyPort: number;
-  pairingPort: number;
+  caPort: number;
   skip?: boolean;
 }
 
@@ -55,8 +55,8 @@ function scriptArgs(options: WindowsFirewallOptions, action: 'status' | 'install
     options.programPath,
     '-ProxyPort',
     String(options.proxyPort),
-    '-PairingPort',
-    String(options.pairingPort),
+    '-CaPort',
+    String(options.caPort),
   ];
 }
 

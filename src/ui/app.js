@@ -13,11 +13,11 @@
     mobileStatus: null,
     mobileToken: null,
     qrExpiryTimer: null,
-    pairingToken: null,
-    pairingExpiryTimer: null,
     collapsedHosts: new Set(),
+    domainFilter: '',
     contextSessionId: null,
     editingRuleId: null,
+    ruleFileLoadedPath: null,
     pendingBootstrap: null,
   };
 
@@ -78,6 +78,12 @@
     const proxy = s.proxy?.lanUrl || s.proxy?.proxyUrl || 'Proxy unavailable';
     const proxyStatus = s.proxy?.running ? 'Proxy Ready' : (s.proxy?.error || 'Proxy Stopped');
     $('#proxySummary').textContent = `${proxy} · ${proxyStatus}`;
+    const listening = $('#proxyListening');
+    listening.classList.toggle('active', Boolean(s.proxy?.running));
+    listening.classList.toggle('error', !s.proxy?.running);
+    $('#proxyListeningText').textContent = s.proxy?.running
+      ? 'TraceLocal | Listening on ' + proxy.replace(/^https?:\/\//, '')
+      : 'TraceLocal | ' + proxyStatus;
     $('#proxyUrl').textContent = proxy;
     $('#proxyStatus').textContent = proxyStatus;
     $('#sessionCount').textContent = s.sessions + (s.sessions === 1 ? ' request' : ' requests');
@@ -85,6 +91,7 @@
     $('#controlUrl').textContent = location.origin;
     $('#trafficCount').textContent = String(state.sessions.length);
     $('#ruleCount').textContent = String(state.rules.length);
+    $('#domainSummary').textContent = 'Domains ' + new Set(state.sessions.map((item) => item.host).filter(Boolean)).size;
     for (const warning of s.warnings || []) {
       if (state.shownWarnings.has(warning)) continue;
       state.shownWarnings.add(warning);
@@ -104,6 +111,7 @@
     const q = $('#trafficSearch').value.trim().toLowerCase();
     const method = $('#methodFilter').value;
     const status = $('#statusFilter').value;
+    if (state.domainFilter && session.host !== state.domainFilter) return false;
     if (q && !(session.url + ' ' + session.host + ' ' + session.path).toLowerCase().includes(q)) return false;
     if (method && session.method !== method) return false;
     if (status === 'mapped' && !session.mapped) return false;
@@ -112,11 +120,36 @@
     return true;
   }
 
+  function renderDomains() {
+    const domainList = $('#domainList');
+    const domainCount = $('#domainCount');
+    if (!domainList || !domainCount) return;
+    const domains = new Map();
+    for (const session of state.sessions) {
+      if (!session.host) continue;
+      domains.set(session.host, (domains.get(session.host) || 0) + 1);
+    }
+    const entries = [...domains.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    $('#domainCount').textContent = String(entries.length);
+    $('#domainSummary').textContent = 'Domains ' + entries.length;
+    $('#domainList').innerHTML =
+      '<button class="domain-row ' + (!state.domainFilter ? 'selected' : '') + '" data-domain="">All <span>' + state.sessions.length + '</span></button>' +
+      entries.map(([host, count]) =>
+        '<button class="domain-row ' + (state.domainFilter === host ? 'selected' : '') + '" data-domain="' + escapeHtml(host) + '"><span class="domain-dot"></span><strong>' + escapeHtml(host) + '</strong><span>' + count + '</span></button>'
+      ).join('');
+    domainList.querySelectorAll('[data-domain]').forEach((button) => button.addEventListener('click', () => {
+      state.domainFilter = button.dataset.domain || '';
+      renderDomains();
+      renderSessions();
+    }));
+  }
+
   function renderSessions() {
     const list = $('#sessionList');
     const sessions = state.sessions.filter(sessionMatches);
     $('#trafficCount').textContent = String(state.sessions.length);
     $('#trafficEmpty').classList.toggle('visible', sessions.length === 0);
+    renderDomains();
 
     // Group sessions by host
     const hostGroups = new Map();
@@ -157,14 +190,14 @@
       // Session rows (only if not collapsed)
       if (!isCollapsed) {
         for (const session of groupSessions) {
-          const total = Number(session.requestBodyBytes || 0) + Number(session.responseBodyBytes || 0);
           html.push(
             '<button class="session-row session-grid ' + (state.selected?.id === session.id ? 'selected' : '') + '" data-session="' + escapeHtml(session.id) + '" role="listitem">' +
               '<span class="method">' + escapeHtml(session.method) + '</span>' +
               '<span class="status-code ' + statusClass(session) + '">' + escapeHtml(session.error ? 'ERR' : (session.statusCode ?? '…')) + '</span>' +
               '<span class="host-path"><strong>' + (session.mapped ? '<span class="mapped-badge">MAPPED</span>' : '') + '</strong><span>' + escapeHtml(session.path) + '</span></span>' +
               '<span class="cell-muted">' + escapeHtml(formatDuration(session.durationMs)) + '</span>' +
-              '<span class="cell-muted">' + escapeHtml(formatBytes(total)) + '</span>' +
+              '<span class="cell-muted">' + escapeHtml(formatBytes(session.requestBodyBytes || 0)) + '</span>' +
+              '<span class="cell-muted">' + escapeHtml(formatBytes(session.responseBodyBytes || 0)) + '</span>' +
             '</button>'
           );
         }
@@ -363,7 +396,7 @@
       '<div class="rule-row ' + (state.editingRuleId === rule.id ? 'selected' : '') + '" data-rule="' + escapeHtml(rule.id) + '" tabindex="0" role="button" aria-label="Edit Map Local rule">' +
         '<button class="switch ' + (rule.enabled ? 'on' : '') + '" data-toggle aria-label="' + (rule.enabled ? 'Disable' : 'Enable') + ' rule"></button>' +
         '<span class="method">' + escapeHtml(rule.method) + '</span>' +
-        '<span class="rule-main"><strong>' + escapeHtml(rule.target.toUpperCase() + ' · ' + rule.pattern) + '</strong><span>' + escapeHtml(rule.contentType || 'Auto content type') + '</span></span>' +
+        '<span class="rule-main"><strong>' + escapeHtml(rule.name || (rule.target.toUpperCase() + ' · ' + rule.pattern)) + '</strong><span>' + escapeHtml(rule.pattern + (rule.delayMs ? ' · ' + rule.delayMs + ' ms delay' : '')) + '</span></span>' +
         '<span class="rule-main"><strong>' + escapeHtml(rule.filePath.split(/[\\/]/).pop()) + '</strong><span title="' + escapeHtml(rule.filePath) + '">' + escapeHtml(rule.filePath) + '</span></span>' +
         '<span class="status-code s' + String(rule.statusCode)[0] + '">' + rule.statusCode + '</span>' +
         '<button class="icon-button" data-delete aria-label="Delete rule">Delete</button>' +
@@ -389,12 +422,49 @@
     });
   }
 
+  async function loadRuleFileContent() {
+    const filePath = $('#ruleFile').value.trim();
+    if (!filePath) return;
+    if (!window.traceLocalDesktop?.readTextFile) {
+      $('#ruleFileState').textContent = 'Preview is available in the desktop app';
+      return;
+    }
+    try {
+      const content = await window.traceLocalDesktop.readTextFile(filePath);
+      $('#ruleFileContent').value = content;
+      state.ruleFileLoadedPath = filePath;
+      $('#ruleFileState').textContent = 'Loaded ' + filePath.split(/[\\/]/).pop();
+    } catch (error) {
+      $('#ruleFileState').textContent = 'Could not load file';
+      toast('Could not load response file: ' + error.message);
+    }
+  }
+
+  async function saveRuleFileContent() {
+    const filePath = $('#ruleFile').value.trim();
+    if (!filePath || !window.traceLocalDesktop?.writeTextFile) return;
+    try {
+      await window.traceLocalDesktop.writeTextFile(filePath, $('#ruleFileContent').value);
+      state.ruleFileLoadedPath = filePath;
+      $('#ruleFileState').textContent = 'Saved ' + filePath.split(/[\\/]/).pop();
+      toast('Response file saved');
+    } catch (error) {
+      toast('Could not save response file: ' + error.message);
+    }
+  }
+
   function resetRuleEditor() {
     state.editingRuleId = null;
     $('#ruleForm').reset();
     $('#ruleEnabled').checked = true;
     $('#ruleMethod').value = '*';
+    $('#ruleMatchMode').value = 'wildcard';
+    $('#ruleIncludeSubpaths').checked = false;
+    $('#ruleDelay').value = '0';
     $('#ruleStatus').value = '200';
+    $('#ruleFileContent').value = '';
+    state.ruleFileLoadedPath = null;
+    $('#ruleFileState').textContent = 'No file loaded';
     $('#ruleFormTitle').textContent = 'New rule';
     $('#ruleIdentity').textContent = '';
     $('#saveRule').textContent = 'Add rule';
@@ -407,12 +477,20 @@
     if (!rule) return;
     state.editingRuleId = id;
     $('#ruleEnabled').checked = rule.enabled;
+    $('#ruleName').value = rule.name || '';
     $('#ruleTarget').value = rule.target;
     $('#rulePattern').value = rule.pattern;
+    $('#ruleMatchMode').value = rule.matchMode || 'wildcard';
+    $('#ruleIncludeSubpaths').checked = Boolean(rule.includeSubpaths);
     $('#ruleMethod').value = rule.method;
     $('#ruleStatus').value = String(rule.statusCode);
+    $('#ruleDelay').value = String(rule.delayMs || 0);
     $('#ruleFile').value = rule.filePath;
     $('#ruleContentType').value = rule.contentType || '';
+    $('#ruleFileContent').value = '';
+    state.ruleFileLoadedPath = null;
+    $('#ruleFileState').textContent = 'Loading response file...';
+    void loadRuleFileContent();
     $('#ruleFormTitle').textContent = 'Edit rule';
     $('#ruleIdentity').textContent = rule.id + ' · order ' + rule.order + (rule.updatedAt ? ' · updated ' + new Date(rule.updatedAt).toLocaleString() : '');
     $('#saveRule').textContent = 'Save changes';
@@ -482,43 +560,12 @@
       const proxyAddr = state.mobileStatus.proxyAddress || '—';
       $('#mobileProxyAddress').textContent = proxyAddr;
       const count = state.mobileStatus.activeClients || 0;
-      $('#connectedDevices').textContent = count + ' connected';
-      $('#disconnectAllDevices').disabled = count === 0;
-      const devices = state.mobileStatus.devices || [];
-      const platformLabel = (platform) => platform === 'ios' ? 'iOS' : platform === 'android' ? 'Android' : 'Device';
-      const stateLabel = (value) => value === 'disconnecting' ? 'Disconnecting' : 'Connected';
-      $('#deviceList').innerHTML = devices.map((device) =>
-        '<div class=\"device-row\" data-device=\"' + escapeHtml(device.sessionId) + '\">' +
-          '<div><strong>' + escapeHtml(device.name) + '</strong><span>' + escapeHtml(platformLabel(device.platform) + ' · ' + stateLabel(device.state)) + '</span></div>' +
-          '<button class=\"button ghost compact\" data-device-disconnect' + (device.state === 'disconnecting' ? ' disabled' : '') + '>Disconnect</button>' +
-        '</div>'
-      ).join('');
-      $$('#deviceList [data-device]').forEach((row) => {
-        row.querySelector('[data-device-disconnect]').addEventListener('click', async () => {
-          try { await api('/api/devices/' + encodeURIComponent(row.dataset.device), { method: 'DELETE' }); await updateMobileStatus(); renderSettings(); }
-          catch (error) { toast('Could not disconnect device: ' + error.message); }
-        });
-      });
-    }
-
-    if (state.pairingToken) {
-      const pairingRemaining = Math.max(0, state.pairingToken.expiresAt - Date.now());
-      const pairingMinutes = Math.floor(pairingRemaining / 60000);
-      const pairingSeconds = Math.floor((pairingRemaining % 60000) / 1000);
-      $('#pairingQrExpiry').textContent = pairingRemaining > 0 ? pairingMinutes + 'm ' + pairingSeconds + 's' : 'expired';
-      $('#pairingDesktopId').textContent = state.pairingToken.desktopId || '—';
-
-      if (pairingRemaining <= 0) {
-        clearInterval(state.pairingExpiryTimer);
-        $('#pairingQrSection').hidden = true;
-        $('#generatePairingQr').hidden = false;
-        state.pairingToken = null;
-      }
+      $('#connectedDevices').textContent = count + ' active';
+      $('#clientSummary').textContent = 'Clients ' + count;
     }
 
     if (state.mobileToken) {
-      const now = Date.now();
-      const remaining = Math.max(0, state.mobileToken.expiresAt - now);
+      const remaining = Math.max(0, state.mobileToken.expiresAt - Date.now());
       const minutes = Math.floor(remaining / 60000);
       const seconds = Math.floor((remaining % 60000) / 1000);
       $('#qrExpiry').textContent = remaining > 0 ? `${minutes}m ${seconds}s` : 'expired';
@@ -527,6 +574,7 @@
         clearInterval(state.qrExpiryTimer);
         $('#mobileQrSection').hidden = true;
         $('#generateQr').hidden = false;
+        $('#mobileQrSvg').innerHTML = '';
         state.mobileToken = null;
       }
     }
@@ -555,9 +603,6 @@
       renderSessions();
       renderDetail();
       renderStatus();
-    } else if (type === 'devices-changed') {
-      state.mobileStatus = { ...(state.mobileStatus || {}), activeClients: (payload.devices || []).length, devices: payload.devices || [] };
-      renderSettings();
     } else if (type === 'rules-changed') {
       state.rules = payload.rules || [];
       if (state.status) state.status.rules = state.rules.length;
@@ -580,7 +625,7 @@
       state.connected = false;
       renderConnection();
     });
-    for (const type of ['status', 'session-added', 'sessions-cleared', 'devices-changed', 'rules-changed']) {
+    for (const type of ['status', 'session-added', 'sessions-cleared', 'rules-changed']) {
       source.addEventListener(type, (event) => {
         const payload = JSON.parse(event.data);
         state.pendingBootstrap?.events.push([type, payload]);
@@ -637,8 +682,14 @@
         return;
       }
       const path = await window.traceLocalDesktop.chooseFile();
-      if (path) $('#ruleFile').value = path;
+      if (path) {
+        $('#ruleFile').value = path;
+        await loadRuleFileContent();
+      }
     });
+
+    $('#loadRuleFile').addEventListener('click', loadRuleFileContent);
+    $('#saveRuleFile').addEventListener('click', saveRuleFileContent);
 
     $('#ruleForm').addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -648,17 +699,24 @@
         const editingId = state.editingRuleId;
         const payload = {
           enabled: $('#ruleEnabled').checked,
+          name: $('#ruleName').value || (editingId ? null : undefined),
           target: $('#ruleTarget').value,
           pattern: $('#rulePattern').value,
+          matchMode: $('#ruleMatchMode').value,
+          includeSubpaths: $('#ruleIncludeSubpaths').checked,
           method: $('#ruleMethod').value || '*',
           filePath: $('#ruleFile').value,
           statusCode: Number($('#ruleStatus').value || 200),
           contentType: $('#ruleContentType').value || (editingId ? null : undefined),
+          delayMs: Number($('#ruleDelay').value || 0),
         };
         const saved = await api(editingId ? '/api/rules/' + encodeURIComponent(editingId) : '/api/rules', {
           method: editingId ? 'PATCH' : 'POST',
           body: JSON.stringify(payload),
         });
+        if (state.ruleFileLoadedPath === $('#ruleFile').value.trim() && window.traceLocalDesktop?.writeTextFile) {
+          await saveRuleFileContent();
+        }
         if (editingId) {
           state.rules = state.rules.map((rule) => rule.id === editingId ? saved : rule);
         } else if (saved && !state.rules.some((rule) => rule.id === saved.id)) {
@@ -680,17 +738,13 @@
       copyText(element.textContent);
     }));
 
-    $('#disconnectAllDevices').addEventListener('click', async () => {
-      try { await api('/api/devices', { method: 'DELETE' }); await updateMobileStatus(); renderSettings(); }
-      catch (error) { toast('Could not disconnect devices: ' + error.message); }
-    });
     $('#generateQr').addEventListener('click', async () => {
       try {
         const tokenData = await api('/api/ca/mobile-token', { method: 'POST' });
         state.mobileToken = tokenData;
+        $('#mobileQrSvg').innerHTML = tokenData.qrSvg || '';
         $('#mobileQrSection').hidden = false;
         $('#generateQr').hidden = true;
-
         $('#mobileCaLink').textContent = tokenData.url;
 
         clearInterval(state.qrExpiryTimer);
@@ -699,36 +753,15 @@
           updateMobileStatus();
         }, 1000);
 
-        toast('QR code generated');
+        renderSettings();
+        toast('CA download QR generated');
       } catch (error) {
-        toast('Failed to generate QR code: ' + error.message);
+        toast('Failed to generate CA QR: ' + error.message);
       }
     });
 
     $('#copyMobileLink').addEventListener('click', () => {
-      if (state.mobileToken) {
-        copyText(state.mobileToken.url);
-      }
-    });
-
-    $('#generatePairingQr').addEventListener('click', async () => {
-      try {
-        const pairing = await api('/api/pairing/token', { method: 'POST' });
-        state.pairingToken = pairing;
-        $('#pairingQrSvg').innerHTML = pairing.qrSvg;
-        $('#pairingQrSection').hidden = false;
-        $('#generatePairingQr').hidden = true;
-        clearInterval(state.pairingExpiryTimer);
-        state.pairingExpiryTimer = setInterval(renderSettings, 1000);
-        renderSettings();
-        toast('Pairing QR generated');
-      } catch (error) {
-        toast('Failed to generate pairing QR: ' + error.message);
-      }
-    });
-
-    $('#copyPairingLink').addEventListener('click', () => {
-      if (state.pairingToken) copyText(state.pairingToken.deepLink || state.pairingToken.url);
+      if (state.mobileToken) copyText(state.mobileToken.url);
     });
   }
 

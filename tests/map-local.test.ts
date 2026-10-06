@@ -295,10 +295,14 @@ test('daemon persists Map Local rules across restart and supports export/import'
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        name: 'Persisted rule',
         target: 'path',
-        pattern: '/persist/*',
+        pattern: '/persist',
+        matchMode: 'exact',
+        includeSubpaths: true,
         method: 'GET',
         filePath: mappedPath,
+        delayMs: 5,
         enabled: true,
       }),
     });
@@ -323,12 +327,28 @@ test('daemon persists Map Local rules across restart and supports export/import'
     const status = await second.start();
     const base = `http://127.0.0.1:${status.controlPort}`;
     const rules = (await (await fetch(`${base}/api/rules`)).json()) as {
-      rules: Array<{ id: string; order: number; enabled: boolean }>;
+      rules: Array<{ id: string; order: number; enabled: boolean; name?: string; matchMode?: string; includeSubpaths?: boolean; delayMs?: number }>;
     };
 
     assert.deepEqual(
-      rules.rules.map((rule) => ({ id: rule.id, order: rule.order, enabled: rule.enabled })),
-      [{ id: firstId, order: 1, enabled: true }],
+      rules.rules.map((rule) => ({
+        id: rule.id,
+        order: rule.order,
+        enabled: rule.enabled,
+        name: rule.name,
+        matchMode: rule.matchMode,
+        includeSubpaths: rule.includeSubpaths,
+        delayMs: rule.delayMs,
+      })),
+      [{
+        id: firstId,
+        order: 1,
+        enabled: true,
+        name: 'Persisted rule',
+        matchMode: 'exact',
+        includeSubpaths: true,
+        delayMs: 5,
+      }],
     );
 
     const mapped = await proxyRequest(
@@ -358,6 +378,113 @@ test('daemon persists Map Local rules across restart and supports export/import'
     assert.equal(imported.rules[0]?.id, firstId);
   } finally {
     await second.stop();
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+
+test('MapRuleStore supports exact, wildcard, subpath matching and validates delay', () => {
+  const store = new MapRuleStore();
+  const exact = store.create({
+    target: 'path',
+    pattern: '/api/jobs',
+    matchMode: 'exact',
+    method: 'GET',
+    filePath: './exact.json',
+  });
+  assert.equal(store.findMatch({
+    method: 'GET',
+    url: 'http://example.test/api/jobs',
+    host: 'example.test',
+    path: '/api/jobs',
+  })?.id, exact.id);
+  assert.equal(store.findMatch({
+    method: 'GET',
+    url: 'http://example.test/api/jobs/1',
+    host: 'example.test',
+    path: '/api/jobs/1',
+  }), undefined);
+
+  store.update(exact.id, { includeSubpaths: true });
+  assert.equal(store.findMatch({
+    method: 'GET',
+    url: 'http://example.test/api/jobs/1',
+    host: 'example.test',
+    path: '/api/jobs/1',
+  })?.id, exact.id);
+
+  const wildcard = store.create({
+    target: 'host',
+    pattern: '*.example.test',
+    matchMode: 'wildcard',
+    method: '*',
+    filePath: './wildcard.json',
+  });
+  assert.equal(store.findMatch({
+    method: 'POST',
+    url: 'http://api.example.test/anything',
+    host: 'api.example.test',
+    path: '/anything',
+  })?.id, wildcard.id);
+
+  assert.throws(() => store.create({
+    target: 'path',
+    pattern: '/bad-delay',
+    filePath: './bad.txt',
+    delayMs: 60_001,
+  }), /delayMs/i);
+  assert.throws(() => store.create({
+    target: 'path',
+    pattern: '/negative-delay',
+    filePath: './bad.txt',
+    delayMs: -1,
+  }), /delayMs/i);
+});
+
+test('Map Local applies persisted exact subpath matching and response delay', async () => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-delay-'));
+  const mappedPath = path.join(tempDir, 'delayed.txt');
+  await writeFile(mappedPath, 'delayed-response');
+
+  const daemon = new TraceLocalDaemon({
+    controlHost: '127.0.0.1',
+    controlPort: 0,
+    proxyPort: 0,
+    mobileCaPort: 0,
+    dataDir: path.join(tempDir, 'data'),
+  });
+
+  try {
+    const status = await daemon.start();
+    const base = `http://127.0.0.1:${status.controlPort}`;
+    const created = await fetch(`${base}/api/rules`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Delayed exact rule',
+        target: 'path',
+        pattern: '/slow',
+        matchMode: 'exact',
+        includeSubpaths: true,
+        method: 'GET',
+        filePath: mappedPath,
+        delayMs: 40,
+      }),
+    });
+    assert.equal(created.status, 201);
+
+    const startedAt = Date.now();
+    const mapped = await proxyRequest(
+      status.proxy.port,
+      'http://unreachable.invalid/slow/child',
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(mapped.statusCode, 200);
+    assert.equal(mapped.body, 'delayed-response');
+    assert.ok(elapsedMs >= 30, `expected mapped response delay, got ${elapsedMs}ms`);
+  } finally {
+    await daemon.stop();
     await rm(tempDir, { recursive: true, force: true });
   }
 });

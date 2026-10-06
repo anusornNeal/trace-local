@@ -254,6 +254,9 @@ export class InterceptProxy {
         .always()
         .thenCallback(async (request) => {
           try {
+            if (rule.delayMs && rule.delayMs > 0) {
+              await new Promise<void>((resolve) => setTimeout(resolve, rule.delayMs));
+            }
             const mapped = await readMappedFile(rule.filePath, rule.contentType);
             return {
               statusCode: rule.statusCode,

@@ -8,7 +8,7 @@
   },
   "type": "commonjs",
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-ui.mjs",
+    "build": "node scripts/clean-dist.mjs && tsc -p tsconfig.json && node scripts/copy-ui.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --import tsx tests/*.test.ts",
     "dev:daemon": "tsx src/daemon/server.ts",
@@ -48,6 +48,7 @@
     "typescript": "^7.0.2"
   },
   "overrides": {
-    "basic-ftp": "6.2.1"
+    "basic-ftp": "6.2.1",
+    "@graphql-tools/utils": "12.0.3"
   }
 }

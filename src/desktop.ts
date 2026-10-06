@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { TraceLocalDaemon } from './daemon/server';
 import { ensureWindowsFirewallReady } from './platform/windows-firewall';
@@ -7,6 +8,8 @@ let mainWindow: BrowserWindow | null = null;
 let daemon: TraceLocalDaemon | null = null;
 let shuttingDown = false;
 let readinessEmitted = false;
+let lastSelectedMapFile: string | null = null;
+const MAX_MAP_LOCAL_EDITOR_BYTES = 1024 * 1024;
 
 const e2eMode = process.env.TRACELOCAL_E2E === '1';
 const electronUserDataDir = process.env.TRACELOCAL_ELECTRON_USER_DATA_DIR?.trim();
@@ -71,8 +74,8 @@ async function createMainWindow(): Promise<void> {
   if (!daemon) {
     const configuredProxyPort = portFromEnv('TRACELOCAL_PROXY_PORT');
     const preferredProxyPort = configuredProxyPort ?? 8888;
-    const configuredMobilePort = portFromEnv('TRACELOCAL_MOBILE_PORT');
-    const preferredMobilePort = configuredMobilePort ?? 8889;
+    const configuredMobileCaPort = portFromEnv('TRACELOCAL_MOBILE_PORT');
+    const preferredMobileCaPort = configuredMobileCaPort ?? 8889;
     const firewallScriptPath = app.isPackaged
       ? path.join(process.resourcesPath, 'installer', 'windows-firewall.ps1')
       : path.resolve(__dirname, '..', 'scripts', 'installer', 'windows-firewall.ps1');
@@ -80,17 +83,17 @@ async function createMainWindow(): Promise<void> {
       programPath: process.execPath,
       scriptPath: firewallScriptPath,
       proxyPort: preferredProxyPort,
-      pairingPort: preferredMobilePort,
+      caPort: preferredMobileCaPort,
       skip:
         e2eMode ||
         process.env.TRACELOCAL_SKIP_FIREWALL === '1' ||
         preferredProxyPort === 0 ||
-        preferredMobilePort === 0,
+        preferredMobileCaPort === 0,
     });
     const startupWarnings = firewall.warning ? [firewall.warning] : [];
 
     try {
-      daemon = await startDesktopDaemon(preferredProxyPort, preferredMobilePort, startupWarnings);
+      daemon = await startDesktopDaemon(preferredProxyPort, preferredMobileCaPort, startupWarnings);
     } catch (error) {
       if (isAddressInUse(error)) {
         throw new Error(`Proxy port ${preferredProxyPort} is already in use. Close the conflicting app or set TRACELOCAL_PROXY_PORT to another stable port.`);
@@ -151,7 +154,38 @@ ipcMain.handle('tracelocal:choose-file', async () => {
     properties: ['openFile'],
   });
 
-  return result.canceled ? null : result.filePaths[0] ?? null;
+  const selected = result.canceled ? null : result.filePaths[0] ?? null;
+  lastSelectedMapFile = selected ? path.resolve(selected) : null;
+  return selected;
+});
+
+function canAccessMapLocalFile(filePath: string): boolean {
+  if (!daemon) return false;
+  const resolved = path.resolve(filePath);
+  if (lastSelectedMapFile === resolved) return true;
+  return daemon.rules.list().some((rule) => path.resolve(rule.filePath) === resolved);
+}
+
+ipcMain.handle('tracelocal:read-text-file', async (_event, filePath: unknown) => {
+  if (typeof filePath !== 'string' || !canAccessMapLocalFile(filePath)) {
+    throw new Error('File is not selected by a Map Local rule');
+  }
+  const resolved = path.resolve(filePath);
+  const info = await stat(resolved);
+  if (!info.isFile() || info.size > MAX_MAP_LOCAL_EDITOR_BYTES) {
+    throw new Error('Map Local file must be a text file smaller than 1 MiB');
+  }
+  return readFile(resolved, 'utf8');
+});
+
+ipcMain.handle('tracelocal:write-text-file', async (_event, filePath: unknown, content: unknown) => {
+  if (typeof filePath !== 'string' || typeof content !== 'string' || !canAccessMapLocalFile(filePath)) {
+    throw new Error('File is not selected by a Map Local rule');
+  }
+  if (Buffer.byteLength(content, 'utf8') > MAX_MAP_LOCAL_EDITOR_BYTES) {
+    throw new Error('Map Local response exceeds 1 MiB');
+  }
+  await writeFile(path.resolve(filePath), content, 'utf8');
 });
 
 app.on('second-instance', () => {

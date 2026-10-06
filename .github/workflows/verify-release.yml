@@ -43,6 +43,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Verify manual mobile setup contract
+        run: npm run verify:mobile
+
       - name: Build
         run: npm run build
 

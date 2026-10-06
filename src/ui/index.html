@@ -16,7 +16,10 @@
           <span id="proxySummary">Starting proxy…</span>
         </div>
       </div>
+      <div id="proxyListening" class="listening-banner"><span class="dot"></span><span id="proxyListeningText">Starting proxy...</span></div>
       <div class="topbar-actions">
+        <span id="domainSummary" class="status-pill muted">Domains 0</span>
+        <span id="clientSummary" class="status-pill muted">Devices 0</span>
         <span id="liveState" class="status-pill muted"><span class="dot"></span>Connecting</span>
         <button id="clearSessions" class="button ghost">Clear</button>
         <a class="button primary" href="/api/export/har" download="tracelocal.har">Export HAR</a>
@@ -32,6 +35,10 @@
     <main>
       <section id="trafficTab" class="tab-panel active">
         <div class="traffic-layout">
+          <aside class="domains-pane">
+            <div class="domains-heading"><span>Domains</span><span id="domainCount">0</span></div>
+            <div id="domainList" class="domain-list"></div>
+          </aside>
           <div class="sessions-pane">
             <div class="toolbar">
               <label class="search-wrap">
@@ -51,7 +58,7 @@
               </select>
             </div>
             <div class="table-head session-grid">
-              <span>Method</span><span>Status</span><span>Host / Path</span><span>Time</span><span>Size</span>
+              <span>Method</span><span>Status</span><span>Host / Path</span><span>Duration</span><span>Request</span><span>Response</span>
             </div>
             <div id="sessionList" class="session-list" role="list"></div>
             <div id="trafficEmpty" class="empty-state">
@@ -97,31 +104,55 @@
           <button id="openRuleForm" class="button primary">New rule</button>
         </div>
 
-        <form id="ruleForm" class="rule-form" hidden>
+        <form id="ruleForm" class="rule-form map-local-editor" hidden>
           <div class="rule-editor-heading"><strong id="ruleFormTitle">New rule</strong><span id="ruleIdentity" class="cell-muted"></span></div>
+          <div class="map-editor-options">
+            <label>Name
+              <input id="ruleName" placeholder="Untitled">
+            </label>
+            <label class="checkbox-label"><input id="ruleEnabled" type="checkbox" checked> Enabled</label>
+          </div>
           <div class="form-grid">
             <label>Match
               <select id="ruleTarget"><option value="url">Full URL</option><option value="host">Host</option><option value="path">Path</option></select>
             </label>
-            <label>Pattern
-              <input id="rulePattern" required placeholder="*://api.example.com/v1/*">
+            <label>URL / Pattern
+              <input id="rulePattern" required placeholder="*://api.example.com/v1/jobs/*">
             </label>
             <label>Method
-              <input id="ruleMethod" value="*" placeholder="*">
+              <select id="ruleMethod"><option value="*">ANY</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>OPTIONS</option></select>
             </label>
             <label>Status
               <input id="ruleStatus" type="number" min="100" max="599" value="200">
             </label>
           </div>
+          <div class="map-editor-options map-editor-options-secondary">
+            <label>Match mode
+              <select id="ruleMatchMode"><option value="wildcard">Use Wildcard</option><option value="exact">Exact URL</option></select>
+            </label>
+            <label class="checkbox-label"><input id="ruleIncludeSubpaths" type="checkbox"> Include all subpaths of this URL</label>
+            <label>Delay response
+              <div class="delay-row"><input id="ruleDelay" type="number" min="0" max="60000" value="0"><span>ms</span></div>
+            </label>
+          </div>
+          <div class="map-to-heading">Map To</div>
           <label>Local response file
             <div class="file-row">
               <input id="ruleFile" required placeholder="C:\path\to\response.json">
               <button id="browseFile" type="button" class="button ghost">Browse…</button>
+              <button id="loadRuleFile" type="button" class="button ghost">Reload</button>
             </div>
           </label>
           <label>Content-Type <span class="optional">optional</span>
             <input id="ruleContentType" placeholder="application/json">
           </label>
+          <label>Response body
+            <textarea id="ruleFileContent" class="response-editor" spellcheck="false" placeholder="Select a local response file to preview and edit it here."></textarea>
+          </label>
+          <div class="response-editor-actions">
+            <span id="ruleFileState" class="cell-muted">No file loaded</span>
+            <button id="saveRuleFile" type="button" class="button ghost">Save response file</button>
+          </div>
           <div class="form-actions">
             <button id="cancelRule" type="button" class="button ghost">Cancel</button>
             <button id="saveRule" type="submit" class="button primary">Add rule</button>
@@ -165,40 +196,31 @@
           </article>
 
           <article class="settings-card">
-            <h2>Mobile companions</h2>
-            <p class="mobile-flow-copy">Normal flow: <strong>Scan QR → trust CA once → approve VPN → Connected</strong>. Returning devices normally only scan a fresh QR and connect.</p>
-            <div class="setting-row"><span>Proxy LAN address</span><code id="mobileProxyAddress">—</code></div>
-            <div class="setting-row"><span>Connected devices</span><strong id="connectedDevices">0 connected</strong></div>
-            <div class="device-controls"><button id="disconnectAllDevices" class="button ghost compact">Disconnect all</button></div>
-            <div id="deviceList" class="device-list"></div>
-            <details class="advanced-mobile-setup">
-              <summary>Advanced manual CA setup</summary>
-              <p>Use this only for a controlled client that cannot run the companion. Normal Android/iPhone setup does not require editing the Wi-Fi proxy.</p>
+            <h2>Mobile setup</h2>
+            <p class="mobile-flow-copy">Set the phone's Wi-Fi proxy manually, then install the Trace Local CA. No mobile app is required.</p>
+            <div class="setting-row"><span>Proxy LAN address</span><code id="mobileProxyAddress">—</code><button class="copy-button" data-copy="mobileProxyAddress">Copy</button></div>
+            <div class="setting-row"><span>Active proxy clients</span><strong id="connectedDevices">0 active</strong></div>
+            <div class="manual-mobile-steps">
+              <div><strong>Android</strong><span>Wi-Fi network → Proxy → Manual → enter the host and port above.</span></div>
+              <div><strong>iPhone / iPad</strong><span>Wi-Fi → current network → Configure Proxy → Manual → enter the host and port above.</span></div>
+            </div>
+            <div class="mobile-ca-download">
+              <h3>Install CA on mobile</h3>
+              <p>Generate a short-lived QR code, scan it with the phone, then download and install the certificate manually.</p>
               <div id="mobileQrSection" hidden>
-                <div class="manual-link-row">
-                  <code id="mobileCaLink">—</code>
-                  <p class="qr-expires">Expires in <strong id="qrExpiry">—</strong></p>
-                  <button id="copyMobileLink" class="button ghost compact">Copy CA link</button>
-                </div>
-              </div>
-              <button id="generateQr" class="button ghost">Generate short-lived CA link</button>
-            </details>
-            <div class="mobile-pairing">
-              <h3>Pair a companion</h3>
-              <div id="pairingQrSection" hidden>
                 <div class="qr-container">
-                  <div id="pairingQrSvg" class="pairing-qr" aria-label="Pairing QR code"></div>
+                  <div id="mobileQrSvg" class="ca-qr" aria-label="CA download QR code"></div>
                   <div class="qr-info">
-                    <p class="qr-expires">Scan within <strong id="pairingQrExpiry">—</strong></p>
-                    <code id="pairingDesktopId">—</code>
-                    <button id="copyPairingLink" class="button ghost compact">Copy pairing link</button>
+                    <code id="mobileCaLink">—</code>
+                    <p class="qr-expires">Link expires in <strong id="qrExpiry">—</strong></p>
+                    <button id="copyMobileLink" class="button ghost compact">Copy CA link</button>
                   </div>
                 </div>
               </div>
-              <button id="generatePairingQr" class="button primary">Pair mobile device</button>
+              <button id="generateQr" class="button primary">Show CA download QR</button>
             </div>
             <div class="notice mobile-notice">
-              Pairing QR codes are single-use. After a successful scan, the companion gets a longer setup window for the OS-required certificate/VPN steps. The CA private key never leaves this computer.
+              The QR code only opens the CA download URL. It does not change Wi-Fi proxy settings or install/trust the certificate automatically.
             </div>
           </article>
 

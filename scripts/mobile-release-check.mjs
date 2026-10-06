@@ -1,120 +1,66 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const root = process.cwd();
 const read = (relative) => readFile(path.join(root, relative), 'utf8');
 
-const [
-  server,
-  deviceStore,
-  desktopHtml,
-  desktopJs,
-  androidMain,
-  androidVpn,
-  androidClient,
-  iosStore,
-  iosTunnel,
-  iosClient,
-  readme,
-] = await Promise.all([
+const [server, desktopHtml, desktopJs, desktop, firewall, readme] = await Promise.all([
   read('src/daemon/server.ts'),
-  read('src/devices/device-session-store.ts'),
   read('src/ui/index.html'),
   read('src/ui/app.js'),
-  read('apps/android-companion/app/src/main/java/com/tracelocal/companion/MainActivity.java'),
-  read('apps/android-companion/app/src/main/java/com/tracelocal/companion/TraceVpnService.java'),
-  read('apps/android-companion/app/src/main/java/com/tracelocal/companion/PairingClient.java'),
-  read('apps/ios-companion/TraceLocal/Core/CompanionStore.swift'),
-  read('apps/ios-companion/TraceLocalExtension/PacketTunnelProvider.swift'),
-  read('apps/ios-companion/TraceLocal/Core/PairingClient.swift'),
+  read('src/desktop.ts'),
+  read('scripts/installer/windows-firewall.ps1'),
   read('README.md'),
 ]);
 
 function requireText(source, value, label) {
-  if (!source.includes(value)) {
-    throw new Error(label + ' is missing required contract text: ' + value);
+  if (!source.includes(value)) throw new Error(label + ' is missing: ' + value);
+}
+
+function forbidText(source, value, label) {
+  if (source.includes(value)) throw new Error(label + ' still contains legacy companion flow: ' + value);
+}
+
+requireText(desktopHtml, 'Mobile setup', 'Desktop mobile UI');
+requireText(desktopHtml, 'No mobile app is required', 'Desktop mobile UI');
+requireText(desktopHtml, 'Show CA download QR', 'Desktop mobile UI');
+requireText(desktopJs, "/api/ca/mobile-token", 'CA QR action');
+requireText(desktopJs, 'mobileQrSvg', 'CA QR rendering');
+requireText(server, 'QRCode.toString(tokenUrl', 'Server CA QR');
+requireText(desktop, 'preferredMobileCaPort = configuredMobileCaPort ?? 8889', 'Stable CA download port');
+requireText(firewall, 'TraceLocal CA Download (Private)', 'Firewall CA rule');
+requireText(readme, '## Mobile setup (no mobile app)', 'README mobile flow');
+
+for (const [label, source] of [
+  ['server', server],
+  ['desktop HTML', desktopHtml],
+  ['desktop JS', desktopJs],
+  ['README', readme],
+]) {
+  for (const forbidden of ['tracelocal://pair', '/api/pairing/token', '/device/session', 'Pair mobile device', 'Mobile companions']) {
+    forbidText(source, forbidden, label);
   }
 }
 
-const lifecycleLabels = [
-  'Ready to pair',
-  'Certificate required',
-  'Ready to connect',
-  'Connecting',
-  'Connected',
-  'Disconnecting',
-  'Needs attention',
-];
-
-for (const label of lifecycleLabels) {
-  requireText(androidMain, label, 'Android lifecycle');
-  requireText(iosStore, label, 'iOS lifecycle');
+for (const relative of ['apps/android-companion', 'apps/ios-companion', 'src/pairing', 'src/devices']) {
+  if (existsSync(path.join(root, relative))) throw new Error('Legacy companion path still exists: ' + relative);
 }
 
-for (const source of [androidClient, iosClient]) {
-  requireText(source, '/device/session', 'Mobile pairing client');
-}
-requireText(androidClient, '/heartbeat', 'Android heartbeat API');
-requireText(androidClient, '/disconnected', 'Android disconnect acknowledgement API');
-requireText(androidVpn, 'client.heartbeat(', 'Android VPN heartbeat lifecycle');
-requireText(androidVpn, 'client.acknowledgeDisconnected(', 'Android VPN disconnect lifecycle');
-requireText(iosTunnel, '/heartbeat', 'iOS heartbeat API');
-requireText(iosTunnel, '/disconnected', 'iOS disconnect acknowledgement API');
-
-requireText(deviceStore, 'DEFAULT_DEVICE_HEARTBEAT_MS = 3_000', 'Device lifecycle');
-requireText(deviceStore, 'DEFAULT_DEVICE_STALE_MS = 15_000', 'Device lifecycle');
-requireText(server, 'waitForDeviceDisconnects', 'Graceful desktop shutdown');
-requireText(server, "const deepLink = 'tracelocal://pair?url='", 'Desktop companion deep link QR');
-requireText(androidMain, 'unwrapPairingUrl', 'Android companion deep-link handling');
-requireText(iosStore, 'url.scheme?.lowercased() == "tracelocal"', 'iOS companion deep-link handling');
-
-requireText(desktopHtml, 'Mobile companions', 'Desktop mobile UI');
-requireText(desktopHtml, 'Advanced manual CA setup', 'Desktop advanced fallback');
-requireText(desktopJs, "stateLabel = (value)", 'Desktop device state rendering');
-requireText(desktopJs, "$('#mobileCaLink').textContent = tokenData.url", 'Manual CA link rendering');
-
-for (const forbidden of ['qrCanvas', 'generateQrCode(', 'generateQrSvg(', 'encodeQrData(']) {
-  if (desktopHtml.includes(forbidden) || desktopJs.includes(forbidden)) {
-    throw new Error('Legacy fake QR implementation still present: ' + forbidden);
-  }
-}
-
-requireText(readme, '## Mobile companions', 'README');
-requireText(readme, 'Returning devices', 'README returning flow');
-requireText(readme, 'does not require editing Wi-Fi proxy settings', 'README normal mobile flow');
-requireText(readme, 'not considered physically validated', 'README physical validation boundary');
-
-if (/adb\s+(shell|reverse)/i.test(readme)) {
-  throw new Error('README normal product documentation must not depend on ADB commands');
-}
-
-const report = {
+console.log(JSON.stringify({
   ok: true,
-  lifecycleLabels,
-  serverPolicy: {
-    heartbeatMs: 3000,
-    staleAfterMs: 15000,
-    gracefulDesktopDisconnect: true,
-  },
-  desktop: {
-    serverGeneratedPairingQrOnly: true,
-    companionDeepLinkQr: true,
-    stablePairingPort: 8889,
-    legacyManualCaFallback: 'short-lived-link',
-  },
-  automation: {
-    androidSourceContract: 'checked',
-    iosSourceContract: 'checked',
-    desktopSourceContract: 'checked',
+  mobileFlow: {
+    mobileAppRequired: false,
+    proxyConfiguration: 'manual',
+    caInstall: 'manual',
+    caDownloadQr: true,
+    proxyPort: 8888,
+    caDownloadPort: 8889,
   },
   physicalValidationStillRequired: [
-    'Android first-use CA + VPN + HTTPS capture',
-    'Android returning QR reconnect and Wi-Fi/LAN change',
-    'iOS Xcode compile/signing + Network Extension entitlement',
-    'iPhone first-use CA full-trust + VPN + HTTPS capture',
-    'iPhone returning QR reconnect and desktop-loss cleanup',
-    'sleep/wake and LAN/IP-change matrix on both platforms',
+    'Android manual Wi-Fi proxy + CA install/trust + HTTPS capture',
+    'iPhone manual Wi-Fi proxy + CA install/full trust + HTTPS capture',
+    'clean Windows install firewall access from a phone on the same LAN',
+    'Wi-Fi/LAN/IP change behavior',
   ],
-};
-
-console.log(JSON.stringify(report, null, 2));
+}, null, 2));

@@ -4,34 +4,46 @@ export interface MapRule {
   id: string;
   order: number;
   enabled: boolean;
+  name?: string;
   target: MapTarget;
   pattern: string;
+  matchMode?: 'wildcard' | 'exact';
+  includeSubpaths?: boolean;
   method: string;
   filePath: string;
   statusCode: number;
   contentType?: string;
+  delayMs?: number;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface CreateMapRuleInput {
   enabled?: boolean;
+  name?: string;
   target?: MapTarget;
   pattern: string;
+  matchMode?: 'wildcard' | 'exact';
+  includeSubpaths?: boolean;
   method?: string;
   filePath: string;
   statusCode?: number;
   contentType?: string;
+  delayMs?: number;
 }
 
 export interface UpdateMapRuleInput {
   enabled?: boolean;
+  name?: string | null;
   target?: MapTarget;
   pattern?: string;
+  matchMode?: 'wildcard' | 'exact';
+  includeSubpaths?: boolean;
   method?: string;
   filePath?: string;
   statusCode?: number;
   contentType?: string | null;
+  delayMs?: number;
 }
 
 export interface SessionRecord {
@@ -93,46 +105,4 @@ export interface DaemonStatus {
   sessions: number;
   rules: number;
   warnings: string[];
-}
-
-
-export type PairingProtocolVersion = 1;
-
-export interface PairingSetupResponse {
-  protocolVersion: PairingProtocolVersion;
-  url: string;
-  deepLink: string;
-  qrSvg: string;
-  expiresAt: number;
-  ttlSeconds: number;
-  desktopId: string;
-  proxyAddress: string;
-  caFingerprint256: string;
-}
-
-export interface PairingPayloadV1 {
-  protocolVersion: PairingProtocolVersion;
-  pairingId: string;
-  desktopId: string;
-  proxyAddress: string;
-  caFingerprint256: string;
-  apiBaseUrl: string;
-  caDownloadUrl: string;
-  issuedAt: number;
-  expiresAt: number;
-}
-
-export type DevicePlatform = 'android' | 'ios' | 'other';
-export type DeviceSessionState = 'connected' | 'disconnecting';
-
-export interface PairedDeviceSession {
-  sessionId: string;
-  pairingId: string;
-  deviceId: string;
-  name: string;
-  platform: DevicePlatform;
-  connectedAt: number;
-  lastHeartbeatAt: number;
-  state: DeviceSessionState;
-  disconnectRequested: boolean;
 }

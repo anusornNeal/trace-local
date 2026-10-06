@@ -10,13 +10,13 @@ param(
   [int]$ProxyPort = 8888,
 
   [ValidateRange(1, 65535)]
-  [int]$PairingPort = 8889
+  [int]$CaPort = 8889
 )
 
 $ErrorActionPreference = 'Stop'
 
 $proxyRuleName = 'TraceLocal Proxy (Private)'
-$pairingRuleName = 'TraceLocal Pairing (Private)'
+$caRuleName = 'TraceLocal CA Download (Private)'
 
 function Get-OwnedRule([string]$Name) {
   Get-NetFirewallRule -DisplayName $Name -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
@@ -27,7 +27,8 @@ function Test-OwnedRule([string]$Name, [int]$Port) {
   $rule = Get-OwnedRule $Name
   if (-not $rule) { return $false }
   if (-not $rule.Enabled -or $rule.Direction -ne 'Inbound' -or $rule.Action -ne 'Allow') { return $false }
-  if ("$($rule.Profile)" -notmatch 'Private') { return $false }
+  $profileText = "$($rule.Profile)"
+  if ($profileText -notmatch 'Private' -or $profileText -notmatch 'Public') { return $false }
 
   $appFilter = $rule | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
   if (-not $appFilter -or -not [string]::Equals($appFilter.Program, $ProgramPath, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -45,7 +46,7 @@ function Test-OwnedRule([string]$Name, [int]$Port) {
 }
 
 function Remove-OwnedRules {
-  foreach ($name in @($proxyRuleName, $pairingRuleName)) {
+  foreach ($name in @($proxyRuleName, $caRuleName)) {
     Get-NetFirewallRule -DisplayName $name -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
       Remove-NetFirewallRule -ErrorAction SilentlyContinue
   }
@@ -64,7 +65,7 @@ function Remove-ConflictingInboundBlockRules {
 
 switch ($Action) {
   'status' {
-    if ((Test-OwnedRule $proxyRuleName $ProxyPort) -and (Test-OwnedRule $pairingRuleName $PairingPort)) {
+    if ((Test-OwnedRule $proxyRuleName $ProxyPort) -and (Test-OwnedRule $caRuleName $CaPort)) {
       exit 0
     }
     exit 2
@@ -79,7 +80,7 @@ switch ($Action) {
       Direction = 'Inbound'
       Action = 'Allow'
       Enabled = 'True'
-      Profile = 'Private'
+      Profile = 'Private, Public'
       Program = $ProgramPath
       Protocol = 'TCP'
       LocalPort = $ProxyPort
@@ -87,18 +88,18 @@ switch ($Action) {
     }
     New-NetFirewallRule @proxyParams | Out-Null
 
-    $pairingParams = @{
-      DisplayName = $pairingRuleName
+    $caParams = @{
+      DisplayName = $caRuleName
       Direction = 'Inbound'
       Action = 'Allow'
       Enabled = 'True'
-      Profile = 'Private'
+      Profile = 'Private, Public'
       Program = $ProgramPath
       Protocol = 'TCP'
-      LocalPort = $PairingPort
+      LocalPort = $CaPort
       RemoteAddress = 'LocalSubnet'
     }
-    New-NetFirewallRule @pairingParams | Out-Null
+    New-NetFirewallRule @caParams | Out-Null
 
     exit 0
   }

@@ -67,6 +67,18 @@ function validateRule(value: unknown, index: number): MapRule {
   if (rule.contentType !== undefined && typeof rule.contentType !== 'string') {
     throw new Error(`rules[${index}].contentType must be a string`);
   }
+  if (rule.name !== undefined && typeof rule.name !== 'string') {
+    throw new Error(`rules[${index}].name must be a string`);
+  }
+  if (rule.matchMode !== undefined && rule.matchMode !== 'wildcard' && rule.matchMode !== 'exact') {
+    throw new Error(`rules[${index}].matchMode must be wildcard or exact`);
+  }
+  if (rule.includeSubpaths !== undefined && typeof rule.includeSubpaths !== 'boolean') {
+    throw new Error(`rules[${index}].includeSubpaths must be boolean`);
+  }
+  if (rule.delayMs !== undefined && (!Number.isInteger(rule.delayMs) || Number(rule.delayMs) < 0 || Number(rule.delayMs) > 60_000)) {
+    throw new Error(`rules[${index}].delayMs must be 0-60000`);
+  }
 
   assertString(rule.createdAt, `rules[${index}].createdAt`);
   assertString(rule.updatedAt, `rules[${index}].updatedAt`);
@@ -79,12 +91,16 @@ function validateRule(value: unknown, index: number): MapRule {
     id: rule.id,
     order: Number(rule.order),
     enabled: rule.enabled,
+    ...(rule.name?.trim() ? { name: rule.name.trim() } : {}),
     target: rule.target,
     pattern: rule.pattern,
+    ...(rule.matchMode ? { matchMode: rule.matchMode } : {}),
+    ...(rule.includeSubpaths !== undefined ? { includeSubpaths: rule.includeSubpaths } : {}),
     method: rule.method.toUpperCase(),
     filePath: path.resolve(rule.filePath),
     statusCode: Number(rule.statusCode),
     contentType: rule.contentType?.trim() || undefined,
+    ...(rule.delayMs !== undefined ? { delayMs: Number(rule.delayMs) } : {}),
     createdAt: rule.createdAt,
     updatedAt: rule.updatedAt,
   };

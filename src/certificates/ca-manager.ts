@@ -90,7 +90,7 @@ export class CertificateAuthorityManager {
   async ensure(): Promise<CertificateAuthorityMaterial> {
     if (this.material) {
       if (Date.parse(this.material.expiresAt) <= Date.now()) {
-        throw new Error('Trace Local CA has expired; restart Trace Local to renew it before downloading certificates or pairing.');
+        throw new Error('Trace Local CA has expired; restart Trace Local to renew it before downloading certificates.');
       }
       return { ...this.material };
     }

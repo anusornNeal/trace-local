@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -6,23 +7,41 @@ import test from 'node:test';
 const root = process.cwd();
 const read = (relative: string) => readFile(path.join(root, relative), 'utf8');
 
-test('desktop mobile onboarding uses stable pairing port and companion deep link', async () => {
-  const [desktop, server, ui, android] = await Promise.all([
+test('mobile onboarding is manual proxy plus CA download QR with no companion app', async () => {
+  const [desktop, server, html, ui] = await Promise.all([
     read('src/desktop.ts'),
     read('src/daemon/server.ts'),
+    read('src/ui/index.html'),
     read('src/ui/app.js'),
-    read('apps/android-companion/app/src/main/java/com/tracelocal/companion/MainActivity.java'),
   ]);
 
-  assert.match(desktop, /preferredMobilePort = configuredMobilePort \?\? 8889/);
+  assert.match(desktop, /preferredMobileCaPort = configuredMobileCaPort \?\? 8889/);
   assert.match(server, /server\.listen\(requestedPort, '0\.0\.0\.0'/);
-  assert.match(server, /tracelocal:\/\/pair\?url=/);
-  assert.match(ui, /pairingToken\.deepLink \|\| state\.pairingToken\.url/);
-  assert.match(android, /unwrapPairingUrl/);
-  assert.match(android, /"tracelocal"\.equalsIgnoreCase\(candidate\.getScheme\(\)\)/);
+  assert.match(server, /QRCode\.toString\(tokenUrl/);
+  assert.match(server, /url: tokenUrl/);
+  assert.match(server, /qrSvg/);
+
+  assert.match(html, /Mobile setup/);
+  assert.match(html, /No mobile app is required/);
+  assert.match(html, /Proxy LAN address/);
+  assert.match(html, /Show CA download QR/);
+  assert.match(ui, /\/api\/ca\/mobile-token/);
+  assert.match(ui, /mobileQrSvg/);
+
+  for (const source of [server, html, ui]) {
+    assert.doesNotMatch(source, /tracelocal:\/\/pair/);
+    assert.doesNotMatch(source, /\/api\/pairing\/token/);
+    assert.doesNotMatch(source, /\/device\/session/);
+    assert.doesNotMatch(source, /Pair mobile device/);
+  }
+
+  assert.equal(existsSync(path.join(root, 'apps', 'android-companion')), false);
+  assert.equal(existsSync(path.join(root, 'apps', 'ios-companion')), false);
+  assert.equal(existsSync(path.join(root, 'src', 'pairing')), false);
+  assert.equal(existsSync(path.join(root, 'src', 'devices')), false);
 });
 
-test('Windows installer owns least-privilege TraceLocal firewall rules', async () => {
+test('Windows installer opens only proxy and CA download ports to the local subnet', async () => {
   const [builder, nsis, firewall] = await Promise.all([
     read('electron-builder.yml'),
     read('scripts/installer/windows-firewall.nsh'),
@@ -33,15 +52,16 @@ test('Windows installer owns least-privilege TraceLocal firewall rules', async (
   assert.match(builder, /include: scripts\/installer\/windows-firewall\.nsh/);
   assert.match(builder, /from: scripts\/installer\/windows-firewall\.ps1/);
 
-  assert.match(nsis, /!macro customInstall/);
-  assert.match(nsis, /!macro customUnInstall/);
-  assert.match(nsis, /-Action install/);
-  assert.match(nsis, /-Action uninstall/);
+  assert.match(nsis, /-ProxyPort 8888/);
+  assert.match(nsis, /-CaPort 8889/);
+  assert.doesNotMatch(nsis, /PairingPort/);
 
-  assert.match(firewall, /Profile = 'Private'/);
+  assert.match(firewall, /TraceLocal Proxy \(Private\)/);
+  assert.match(firewall, /TraceLocal CA Download \(Private\)/);
+  assert.match(firewall, /Profile = 'Private, Public'/);
   assert.match(firewall, /RemoteAddress = 'LocalSubnet'/);
   assert.match(firewall, /LocalPort = \$ProxyPort/);
-  assert.match(firewall, /LocalPort = \$PairingPort/);
-  assert.match(firewall, /Remove-ConflictingInboundBlockRules/);
+  assert.match(firewall, /LocalPort = \$CaPort/);
+  assert.doesNotMatch(firewall, /PairingPort/);
   assert.doesNotMatch(firewall, /Profile = 'Any'/);
 });

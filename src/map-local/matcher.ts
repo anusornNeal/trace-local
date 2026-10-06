@@ -38,5 +38,20 @@ export function matchesMapRule(rule: MapRule, request: MatchableRequest): boolea
         ? request.host
         : request.path;
 
-  return globToRegExp(rule.pattern, rule.target === 'host').test(candidate);
+  const caseInsensitive = rule.target === 'host';
+  const normalize = (value: string) => caseInsensitive ? value.toLowerCase() : value;
+  const normalizedCandidate = normalize(candidate);
+  const normalizedPattern = normalize(rule.pattern);
+
+  let matched =
+    rule.matchMode === 'exact'
+      ? normalizedCandidate === normalizedPattern
+      : globToRegExp(rule.pattern, caseInsensitive).test(candidate);
+
+  if (!matched && rule.includeSubpaths) {
+    const base = normalizedPattern.replace(/[\/*]+$/, '');
+    matched = normalizedCandidate === base || normalizedCandidate.startsWith(base + '/');
+  }
+
+  return matched;
 }

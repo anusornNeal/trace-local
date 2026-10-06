@@ -24,10 +24,26 @@ function normalizeStatusCode(statusCode: number | undefined): number {
   return value;
 }
 
+function normalizeDelayMs(delayMs: number | undefined): number | undefined {
+  if (delayMs === undefined) return undefined;
+  if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 60_000) {
+    throw new Error('delayMs must be an integer between 0 and 60000');
+  }
+  return delayMs;
+}
+
 function normalizeTarget(target: MapTarget | undefined): MapTarget {
   const value = target ?? 'url';
   if (!MAP_TARGETS.has(value)) throw new Error('target must be url, host, or path');
   return value;
+}
+
+function normalizeMatchMode(mode: MapRule['matchMode']): MapRule['matchMode'] {
+  if (mode === undefined) return undefined;
+  if (mode !== 'wildcard' && mode !== 'exact') {
+    throw new Error('matchMode must be wildcard or exact');
+  }
+  return mode;
 }
 
 function normalizePattern(pattern: string | undefined): string {
@@ -72,12 +88,16 @@ export class MapRuleStore {
       id: randomUUID(),
       order: this.nextOrder++,
       enabled: input.enabled ?? true,
+      ...(input.name?.trim() ? { name: input.name.trim() } : {}),
       target: normalizeTarget(input.target),
       pattern: normalizePattern(input.pattern),
+      ...(normalizeMatchMode(input.matchMode) ? { matchMode: normalizeMatchMode(input.matchMode) } : {}),
+      ...(input.includeSubpaths !== undefined ? { includeSubpaths: input.includeSubpaths } : {}),
       method: normalizeMethod(input.method),
       filePath: normalizeFilePath(input.filePath),
       statusCode: normalizeStatusCode(input.statusCode),
       contentType: input.contentType?.trim() || undefined,
+      ...(normalizeDelayMs(input.delayMs) !== undefined ? { delayMs: normalizeDelayMs(input.delayMs) } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -93,8 +113,11 @@ export class MapRuleStore {
     const next: MapRule = {
       ...current,
       enabled: input.enabled ?? current.enabled,
+      name: input.name === undefined ? current.name : input.name?.trim() || undefined,
       target: input.target === undefined ? current.target : normalizeTarget(input.target),
       pattern: input.pattern === undefined ? current.pattern : normalizePattern(input.pattern),
+      matchMode: input.matchMode === undefined ? current.matchMode : normalizeMatchMode(input.matchMode),
+      includeSubpaths: input.includeSubpaths === undefined ? current.includeSubpaths : input.includeSubpaths,
       method: input.method === undefined ? current.method : normalizeMethod(input.method),
       filePath: input.filePath === undefined ? current.filePath : normalizeFilePath(input.filePath),
       statusCode:
@@ -105,6 +128,7 @@ export class MapRuleStore {
           : input.contentType === null
             ? undefined
             : input.contentType.trim() || undefined,
+      delayMs: input.delayMs === undefined ? current.delayMs : normalizeDelayMs(input.delayMs),
       updatedAt: new Date().toISOString(),
     };
 

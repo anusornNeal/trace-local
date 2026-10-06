@@ -54,7 +54,7 @@ test('control listener rejects rebinding and browser mutation attacks while pres
   const sameOrigin = await request(port, '/api/rules', { origin: base, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json; charset=utf-8' }, 'POST', JSON.stringify(ruleInput('valid')));
   assert.equal(sameOrigin.status, 201);
   assert.equal((await request(port, '/api/status')).status, 200);
-  assert.equal((await request(port, '/api/pairing/token', {}, 'POST')).status, 201);
+  assert.equal((await request(port, '/api/ca/mobile-token', {}, 'POST')).status, 201);
 });
 
 test('authority policy checks IPv6 ports and preserves explicit configured host', () => {
@@ -68,112 +68,39 @@ test('authority policy checks IPv6 ports and preserves explicit configured host'
   assert.equal(requestPolicyError(incoming('192.168.1.12:4040', '192.168.1.12'), 4040, '0.0.0.0'), undefined);
 });
 
-test('mobile listener rejects browser-origin attacks and keeps direct pairing callers', async (context) => {
+test('CA download listener rejects browser-origin attacks and serves direct certificate downloads', async (context) => {
   const { status } = await fixture(context);
-  const token = JSON.parse((await request(status.controlPort, '/api/pairing/token', {}, 'POST')).body);
-  const pairing = new URL(token.url);
-  const mobilePort = Number(pairing.port);
-  assert.equal((await request(mobilePort, pairing.pathname + pairing.search, { origin: 'https://attacker.invalid' })).status, 403);
-  assert.equal((await request(mobilePort, pairing.pathname + pairing.search)).status, 200);
-  assert.equal((await request(mobilePort, '/device/session', { 'content-type': 'text/plain' }, 'POST', '{}')).status, 415);
+  const setup = JSON.parse((await request(status.controlPort, '/api/ca/mobile-token', {}, 'POST')).body);
+  const download = new URL(setup.url);
+  const mobilePort = Number(download.port);
+
+  assert.equal((await request(mobilePort, download.pathname, { origin: 'https://attacker.invalid' })).status, 403);
+  const direct = await request(mobilePort, download.pathname);
+  assert.equal(direct.status, 200);
+  assert.match(direct.body, /BEGIN CERTIFICATE/);
+  assert.equal((await request(mobilePort, '/pair/legacy')).status, 404);
+  assert.equal((await request(mobilePort, '/device/session', { 'content-type': 'application/json' }, 'POST', '{}')).status, 404);
 });
 
-test('mobile shutdown rejects new and late-body sessions but allows heartbeat and acknowledgement', async (context) => {
+test('cached CA expiry blocks new CA download links', async (context) => {
   const { daemon, status } = await fixture(context);
-  const token = JSON.parse((await request(status.controlPort, '/api/pairing/token', {}, 'POST')).body);
-  const pairing = new URL(token.url);
-  const mobilePort = Number(pairing.port);
-  const authorized = JSON.parse((await request(mobilePort, pairing.pathname + pairing.search)).body);
-  daemon.deviceSessions.authorizePairing('existing', Date.now() + 60_000);
-  const existing = daemon.deviceSessions.connect('existing', { deviceId: 'active', name: 'Active phone', platform: 'android' })!;
-  const newToken = JSON.parse((await request(status.controlPort, '/api/pairing/token', {}, 'POST')).body);
-  const newPairing = new URL(newToken.url);
-  const body = JSON.stringify({ pairingId: authorized.pairingId, deviceId: 'late', name: 'Late phone', platform: 'android' });
-  const entered = deferred();
-  const handle = (daemon as any).handleMobileCaRequest.bind(daemon);
-  (daemon as any).handleMobileCaRequest = (incoming: http.IncomingMessage, response: http.ServerResponse) => {
-    const result = handle(incoming, response);
-    if (incoming.url === '/device/session') entered.resolve();
-    return result;
-  };
-  let late!: http.ClientRequest;
-  const lateResponse = new Promise<number>((resolve, reject) => {
-    late = http.request({ host: '127.0.0.1', port: mobilePort, path: '/device/session', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, (response) => { response.resume(); resolve(response.statusCode!); });
-    late.once('error', reject);
-    late.write(body.slice(0, 1));
-  });
-  await entered.promise;
-  const stopping = daemon.stop();
-  assert.equal((await request(mobilePort, '/device/session', { 'content-type': 'application/json' }, 'POST', body)).status, 503);
-  assert.equal((await request(mobilePort, newPairing.pathname + newPairing.search)).status, 503);
-  late.end(body.slice(1));
-  assert.equal(await lateResponse, 503);
-  assert.equal(daemon.deviceSessions.size, 1);
-  const heartbeat = await request(mobilePort, `/device/session/${existing.sessionId}/heartbeat`, {}, 'POST');
-  assert.equal(heartbeat.status, 200);
-  assert.equal(JSON.parse(heartbeat.body).disconnectRequested, true);
-  assert.equal((await request(mobilePort, `/device/session/${existing.sessionId}/disconnected`, {}, 'POST')).status, 200);
-  await stopping;
-});
-
-test('cached CA expiry blocks onboarding without consuming tokens or authorizations', async (context) => {
-  const { daemon, status } = await fixture(context);
-  const pendingToken = JSON.parse((await request(status.controlPort, '/api/pairing/token', {}, 'POST')).body);
-  const pendingPairing = new URL(pendingToken.url);
-  const mobilePort = Number(pendingPairing.port);
-  const sessionToken = JSON.parse((await request(status.controlPort, '/api/pairing/token', {}, 'POST')).body);
-  const sessionPairing = new URL(sessionToken.url);
-  const authorized = JSON.parse((await request(mobilePort, sessionPairing.pathname + sessionPairing.search)).body);
-  daemon.deviceSessions.authorizePairing('existing', Date.now() + 60_000);
-  const existing = daemon.deviceSessions.connect('existing', { deviceId: 'active', name: 'Existing phone', platform: 'android' })!;
   const metadata = JSON.parse((await request(status.controlPort, '/api/ca')).body);
-  const body = JSON.stringify({ pairingId: authorized.pairingId, deviceId: 'late', name: 'Late phone', platform: 'android' });
-  const entered = deferred();
-  const handle = (daemon as any).handleMobileCaRequest.bind(daemon);
-  (daemon as any).handleMobileCaRequest = (incoming: http.IncomingMessage, response: http.ServerResponse) => {
-    const result = handle(incoming, response);
-    if (incoming.url === '/device/session') entered.resolve();
-    return result;
-  };
-  let late!: http.ClientRequest;
-  const lateResponse = new Promise<number>((resolve, reject) => {
-    late = http.request({ host: '127.0.0.1', port: mobilePort, path: '/device/session', method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, (response) => { response.resume(); resolve(response.statusCode!); });
-    late.once('error', reject);
-    late.write(body.slice(0, 1));
-  });
-  await entered.promise;
+  const before = (daemon.caTokenServer as any).tokens.size;
+
   const realNow = Date.now.bind(Date);
   let expiredNow: number | undefined = Date.parse(metadata.expiresAt);
   context.mock.method(Date, 'now', () => expiredNow ?? realNow());
   try {
-    for (const endpoint of ['/api/pairing/token', '/api/ca/mobile-token']) {
-      const response = await request(status.controlPort, endpoint, {}, 'POST');
-      assert.equal(response.status, 503);
-      assert.deepEqual(JSON.parse(response.body), { error: 'ca_expired' });
-    }
-    const redemption = await request(mobilePort, pendingPairing.pathname + pendingPairing.search);
-    assert.equal(redemption.status, 503);
-    assert.deepEqual(JSON.parse(redemption.body), { error: 'ca_expired' });
-    assert.equal(daemon.pairingTokens.validate(pendingPairing.pathname.slice('/pair/'.length)), true);
-    const connection = await request(mobilePort, '/device/session', { 'content-type': 'application/json' }, 'POST', body);
-    assert.equal(connection.status, 503);
-    assert.deepEqual(JSON.parse(connection.body), { error: 'ca_expired' });
-    late.end(body.slice(1));
-    assert.equal(await lateResponse, 503);
-    assert.equal((daemon.deviceSessions as any).pairingAuthorizations.has(authorized.pairingId), true);
-    assert.equal(daemon.deviceSessions.size, 1);
+    const response = await request(status.controlPort, '/api/ca/mobile-token', {}, 'POST');
+    assert.equal(response.status, 503);
+    assert.deepEqual(JSON.parse(response.body), { error: 'ca_expired' });
+    assert.equal((daemon.caTokenServer as any).tokens.size, before);
     assert.equal((await request(status.controlPort, '/api/ca')).status, 200);
-    assert.equal((await request(mobilePort, `/device/session/${existing.sessionId}/heartbeat`, {}, 'POST')).status, 200);
-    assert.equal((await request(mobilePort, `/device/session/${existing.sessionId}/disconnected`, {}, 'POST')).status, 200);
   } finally {
     expiredNow = undefined;
-    late.destroy();
   }
-  assert.equal((await request(mobilePort, pendingPairing.pathname + pendingPairing.search)).status, 200);
-  const restored = await request(mobilePort, '/device/session', { 'content-type': 'application/json' }, 'POST', body);
-  assert.equal(restored.status, 201);
-  const sessionId = JSON.parse(restored.body).session.sessionId;
-  assert.equal((await request(mobilePort, `/device/session/${sessionId}/disconnected`, {}, 'POST')).status, 200);
+
+  assert.equal((await request(status.controlPort, '/api/ca/mobile-token', {}, 'POST')).status, 201);
 });
 
 test('failed queued rule mutation cannot roll back a later successful transaction', async (context) => {
@@ -297,15 +224,19 @@ test('shutdown coalesces while starting and closes partial bodies plus SSE socke
   await stopping;
   assert.equal(daemon.status.proxy.running, false);
   const status = await daemon.start();
-  const pairing = JSON.parse((await request(status.controlPort, '/api/pairing/token', {}, 'POST')).body);
-  const mobilePort = Number(new URL(pairing.url).port);
+  const caSetup = JSON.parse((await request(status.controlPort, '/api/ca/mobile-token', {}, 'POST')).body);
+  const mobilePort = Number(new URL(caSetup.url).port);
   const clients: net.Socket[] = [];
   for (const port of [status.controlPort, mobilePort]) {
     const socket = net.connect(port, '127.0.0.1');
     socket.on('error', () => undefined);
     clients.push(socket);
     await new Promise<void>((resolve) => socket.once('connect', resolve));
-    socket.write(`POST ${port === mobilePort ? '/device/session' : '/api/rules'} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{`);
+    if (port === mobilePort) {
+      socket.write(`GET /ca/incomplete HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n`);
+    } else {
+      socket.write(`POST /api/rules HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{`);
+    }
   }
   const eventRequest = http.get(`http://127.0.0.1:${status.controlPort}/api/events`);
   eventRequest.on('error', () => undefined);
