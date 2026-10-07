@@ -731,6 +731,95 @@
     });
   }
 
+  function highlightRuleBodySource(source) {
+    if (!source) return '';
+
+    const contentType = ($('#ruleContentType')?.value || '').toLowerCase();
+    const trimmed = source.trimStart();
+    const looksJson = contentType.includes('json') || trimmed.startsWith('{') || trimmed.startsWith('[');
+    if (!looksJson) return escapeHtml(source);
+
+    let html = '';
+    let index = 0;
+
+    while (index < source.length) {
+      const char = source[index];
+
+      if (/\s/.test(char)) {
+        html += char;
+        index += 1;
+        continue;
+      }
+
+      if (char === '"') {
+        let end = index + 1;
+        while (end < source.length) {
+          if (source[end] === '\\') {
+            end += 2;
+            continue;
+          }
+          if (source[end] === '"') {
+            end += 1;
+            break;
+          }
+          end += 1;
+        }
+
+        const token = source.slice(index, end);
+        let lookahead = end;
+        while (lookahead < source.length && /\s/.test(source[lookahead])) lookahead += 1;
+        const tokenClass = source[lookahead] === ':' ? 'key' : 'string';
+        html += '<span class="json-editor-token ' + tokenClass + '">' + escapeHtml(token) + '</span>';
+        index = end;
+        continue;
+      }
+
+      const number = source.slice(index).match(/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/);
+      if (number) {
+        html += '<span class="json-editor-token number">' + escapeHtml(number[0]) + '</span>';
+        index += number[0].length;
+        continue;
+      }
+
+      if (source.startsWith('true', index) || source.startsWith('false', index)) {
+        const token = source.startsWith('true', index) ? 'true' : 'false';
+        html += '<span class="json-editor-token boolean">' + token + '</span>';
+        index += token.length;
+        continue;
+      }
+
+      if (source.startsWith('null', index)) {
+        html += '<span class="json-editor-token null">null</span>';
+        index += 4;
+        continue;
+      }
+
+      if ('{}[],:'.includes(char)) {
+        html += '<span class="json-editor-token punctuation">' + escapeHtml(char) + '</span>';
+        index += 1;
+        continue;
+      }
+
+      html += escapeHtml(char);
+      index += 1;
+    }
+
+    return html;
+  }
+
+  function syncRuleBodyHighlight() {
+    const input = $('#ruleFileContent');
+    const highlight = $('#ruleFileHighlight');
+    if (!input || !highlight) return;
+    highlight.innerHTML = highlightRuleBodySource(input.value) + '\n';
+    highlight.style.transform = 'translate(' + (-input.scrollLeft) + 'px, ' + (-input.scrollTop) + 'px)';
+  }
+
+  function setRuleBodyValue(value) {
+    $('#ruleFileContent').value = value ?? '';
+    syncRuleBodyHighlight();
+  }
+
   async function loadRuleFileContent() {
     const filePath = $('#ruleFile').value.trim();
     if (!filePath) return;
@@ -740,7 +829,7 @@
     }
     try {
       const content = await window.traceLocalDesktop.readTextFile(filePath);
-      $('#ruleFileContent').value = content;
+      setRuleBodyValue(content);
       state.ruleFileLoadedPath = filePath;
       $('#ruleFileState').textContent = 'Loaded ' + filePath.split(/[\\/]/).pop();
     } catch (error) {
@@ -865,10 +954,10 @@
     $('#ruleFormError').hidden = true;
 
     if (rule.responseBody !== undefined) {
-      $('#ruleFileContent').value = rule.responseBody;
+      setRuleBodyValue(rule.responseBody);
       $('#ruleFileState').textContent = '';
     } else {
-      $('#ruleFileContent').value = '';
+      setRuleBodyValue('');
       $('#ruleFileState').textContent = rule.filePath ? 'Loading legacy response file...' : '';
       if (rule.filePath) void loadRuleFileContent();
     }
@@ -1356,9 +1445,14 @@
           $('#ruleDetailTitle').textContent = $('#rulePattern').value || 'Map Local rule';
           updateRuleMatchHint();
         }
+        if (selector === '#ruleFileContent' || selector === '#ruleContentType') {
+          syncRuleBodyHighlight();
+        }
         scheduleRuleSave();
       });
     }
+
+    $('#ruleFileContent').addEventListener('scroll', syncRuleBodyHighlight);
 
     for (const selector of ['#ruleMethod', '#ruleMatchMode', '#ruleIncludeSubpaths', '#ruleEnabled']) {
       $(selector).addEventListener('change', () => {

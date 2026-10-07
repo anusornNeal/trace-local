@@ -142,7 +142,10 @@ test('Map Local edits captured responses with full URL matching and autosave', a
   assert.match(html, /<option value="wildcard">Wildcard<\/option>/);
   assert.match(html, /<option value="regex">Regex<\/option>/);
   assert.match(html, /id="ruleSaveState"/);
+  assert.match(html, /id="ruleFileHighlight"/);
   assert.match(html, /Edit the mapped response directly here/);
+  assert.match(ui, /highlightRuleBodySource/);
+  assert.match(ui, /syncRuleBodyHighlight/);
   assert.doesNotMatch(html, /id="browseFile"/);
   assert.doesNotMatch(html, /id="loadRuleFile"/);
   assert.doesNotMatch(html, /id="saveRuleFile"/);

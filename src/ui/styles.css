@@ -981,6 +981,56 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
   max-height: none;
   resize: vertical;
 }
+
+.json-editor-shell {
+  position: relative;
+  width: 100%;
+  min-height: 340px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #090c10;
+}
+.json-editor-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 100%;
+  min-height: 100%;
+  margin: 0;
+  padding: 12px;
+  pointer-events: none;
+  white-space: pre;
+  color: #c9d4df;
+  font: 11px/1.5 "Cascadia Code", Consolas, monospace;
+  tab-size: 2;
+  will-change: transform;
+}
+.json-editor-input {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: #edf2f8;
+  -webkit-text-fill-color: transparent;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
+}
+.json-editor-input::placeholder {
+  color: var(--muted-2);
+  -webkit-text-fill-color: var(--muted-2);
+}
+.json-editor-input::selection {
+  background: rgba(124,156,255,.28);
+}
+.json-editor-token.key { color: #8ab4f8; }
+.json-editor-token.string { color: #a8d7a8; }
+.json-editor-token.number { color: #d6b4ff; }
+.json-editor-token.boolean { color: #7dd3fc; }
+.json-editor-token.null { color: #f2b84b; }
+.json-editor-token.punctuation { color: #7f8b99; }
 .rule-save-state {
   display: inline-flex;
   align-items: center;
