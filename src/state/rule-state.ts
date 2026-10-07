@@ -54,7 +54,14 @@ function validateRule(value: unknown, index: number): MapRule {
 
   assertString(rule.pattern, `rules[${index}].pattern`);
   assertString(rule.method, `rules[${index}].method`);
-  assertString(rule.filePath, `rules[${index}].filePath`);
+  if (rule.filePath !== undefined) assertString(rule.filePath, `rules[${index}].filePath`);
+  if (rule.responseBody !== undefined && typeof rule.responseBody !== 'string') {
+    throw new Error(`rules[${index}].responseBody must be a string`);
+  }
+  if (rule.host !== undefined) assertString(rule.host, `rules[${index}].host`);
+  if (rule.filePath === undefined && rule.responseBody === undefined) {
+    throw new Error(`rules[${index}] requires responseBody or filePath`);
+  }
 
   if (
     !Number.isInteger(rule.statusCode) ||
@@ -94,10 +101,12 @@ function validateRule(value: unknown, index: number): MapRule {
     ...(rule.name?.trim() ? { name: rule.name.trim() } : {}),
     target: rule.target,
     pattern: rule.pattern,
+    ...(rule.host?.trim() ? { host: rule.host.trim().toLowerCase() } : {}),
     ...(rule.matchMode ? { matchMode: rule.matchMode } : {}),
     ...(rule.includeSubpaths !== undefined ? { includeSubpaths: rule.includeSubpaths } : {}),
     method: rule.method.toUpperCase(),
-    filePath: path.resolve(rule.filePath),
+    ...(rule.filePath ? { filePath: path.resolve(rule.filePath) } : {}),
+    ...(rule.responseBody !== undefined ? { responseBody: rule.responseBody } : {}),
     statusCode: Number(rule.statusCode),
     contentType: rule.contentType?.trim() || undefined,
     ...(rule.delayMs !== undefined ? { delayMs: Number(rule.delayMs) } : {}),

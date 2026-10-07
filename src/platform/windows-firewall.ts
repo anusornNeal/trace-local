@@ -70,7 +70,22 @@ async function checkStatus(options: WindowsFirewallOptions): Promise<boolean> {
 }
 
 async function runElevatedInstall(options: WindowsFirewallOptions): Promise<ProcessResult> {
-  const childArgs = scriptArgs(options, 'install').map(psLiteral).join(', ');
+  const childCommand = [
+    `& ${psLiteral(options.scriptPath)}`,
+    `-Action 'install'`,
+    `-ProgramPath ${psLiteral(options.programPath)}`,
+    `-ProxyPort ${options.proxyPort}`,
+    `-CaPort ${options.caPort};`,
+    'exit $LASTEXITCODE',
+  ].join(' ');
+  const encodedCommand = Buffer.from(childCommand, 'utf16le').toString('base64');
+  const childArgs = [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-EncodedCommand',
+    encodedCommand,
+  ].map(psLiteral).join(', ');
   const command = [
     `$p = Start-Process -FilePath 'powershell.exe'`,
     `-ArgumentList @(${childArgs})`,

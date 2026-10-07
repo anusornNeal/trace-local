@@ -88,3 +88,27 @@ test('SessionStore emits add and clear events without exposing mutable records',
   store.add(record('after-unsubscribe', 20));
   assert.equal(events.length, 2);
 });
+
+
+test('SessionStore removes traffic by host and emits removed ids', () => {
+  const store = new SessionStore(4);
+  const first = record('first', 1);
+  const second = record('second', 2);
+  const other = record('other', 3);
+  first.host = second.host = 'api.example.test';
+  other.host = 'cdn.example.test';
+  store.add(first);
+  store.add(second);
+  store.add(other);
+
+  const events: any[] = [];
+  store.subscribe((event) => events.push(event));
+  assert.equal(store.removeByHost('api.example.test'), 2);
+  assert.deepEqual(store.list().map((item) => item.id), ['other']);
+  assert.deepEqual(events[0], {
+    type: 'sessions-removed',
+    removed: 2,
+    ids: ['second', 'first'],
+    host: 'api.example.test',
+  });
+});

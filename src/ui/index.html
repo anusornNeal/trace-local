@@ -21,8 +21,6 @@
         <span id="domainSummary" class="status-pill muted">Domains 0</span>
         <span id="clientSummary" class="status-pill muted">Devices 0</span>
         <span id="liveState" class="status-pill muted"><span class="dot"></span>Connecting</span>
-        <button id="clearSessions" class="button ghost">Clear</button>
-        <a class="button primary" href="/api/export/har" download="tracelocal.har">Export HAR</a>
       </div>
     </header>
 
@@ -34,11 +32,12 @@
 
     <main>
       <section id="trafficTab" class="tab-panel active">
-        <div class="traffic-layout">
+        <div id="trafficLayout" class="traffic-layout">
           <aside class="domains-pane">
             <div class="domains-heading"><span>Domains</span><span id="domainCount">0</span></div>
             <div id="domainList" class="domain-list"></div>
           </aside>
+          <div class="pane-resizer" data-pane-resizer="domains" role="separator" aria-orientation="vertical" aria-label="Resize domains pane"></div>
           <div class="sessions-pane">
             <div class="toolbar">
               <label class="search-wrap">
@@ -56,9 +55,18 @@
                 <option value="4">4xx</option><option value="5">5xx</option>
                 <option value="error">Errors</option><option value="mapped">Mapped</option>
               </select>
+              <div class="traffic-toolbar-actions">
+                <button id="clearSessions" class="button ghost compact" type="button">Clear</button>
+                <a class="button quiet compact" href="/api/export/har" download="tracelocal.har">Export HAR</a>
+              </div>
             </div>
-            <div class="table-head session-grid">
-              <span>Method</span><span>Status</span><span>Host / Path</span><span>Duration</span><span>Request</span><span>Response</span>
+            <div id="trafficTableHead" class="table-head session-grid">
+              <span class="column-head">Method<i class="column-resizer" data-column="method"></i></span>
+              <button class="column-head sortable" data-sort="statusCode">Status<span class="sort-indicator"></span><i class="column-resizer" data-column="status"></i></button>
+              <span class="column-head">Host / Path<i class="column-resizer" data-column="target"></i></span>
+              <button class="column-head sortable" data-sort="durationMs">Duration<span class="sort-indicator"></span><i class="column-resizer" data-column="duration"></i></button>
+              <button class="column-head sortable" data-sort="requestBodyBytes">Request<span class="sort-indicator"></span><i class="column-resizer" data-column="request"></i></button>
+              <button class="column-head sortable" data-sort="responseBodyBytes">Response<span class="sort-indicator"></span></button>
             </div>
             <div id="sessionList" class="session-list" role="list"></div>
             <div id="trafficEmpty" class="empty-state">
@@ -67,6 +75,7 @@
               <p>Configure your app or browser to use the proxy shown above. Requests will appear here live.</p>
             </div>
           </div>
+          <div class="pane-resizer" data-pane-resizer="detail" role="separator" aria-orientation="vertical" aria-label="Resize detail pane"></div>
 
           <aside id="detailPane" class="detail-pane">
             <div id="detailEmpty" class="detail-empty">
@@ -99,7 +108,7 @@
           <div>
             <p class="eyebrow">Response overrides</p>
             <h1>Map Local</h1>
-            <p>Serve a local file instead of the upstream response when a request matches.</p>
+            <p>Override matching responses directly, like Proxyman Map Local.</p>
           </div>
           <button id="openRuleForm" class="button primary">New rule</button>
         </div>
@@ -116,8 +125,8 @@
             <label>Match
               <select id="ruleTarget"><option value="url">Full URL</option><option value="host">Host</option><option value="path">Path</option></select>
             </label>
-            <label>URL / Pattern
-              <input id="rulePattern" required placeholder="*://api.example.com/v1/jobs/*">
+            <label>URL / Path
+              <input id="rulePattern" required placeholder="/v1/jobs/*">
             </label>
             <label>Method
               <select id="ruleMethod"><option value="*">ANY</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>OPTIONS</option></select>
@@ -135,26 +144,17 @@
               <div class="delay-row"><input id="ruleDelay" type="number" min="0" max="60000" value="0"><span>ms</span></div>
             </label>
           </div>
-          <div class="map-to-heading">Map To</div>
-          <label>Local response file
-            <div class="file-row">
-              <input id="ruleFile" required placeholder="C:\path\to\response.json">
-              <button id="browseFile" type="button" class="button ghost">Browse…</button>
-              <button id="loadRuleFile" type="button" class="button ghost">Reload</button>
-            </div>
-          </label>
+          <div class="map-to-heading">Response</div>
+          <input id="ruleHost" type="hidden">
+          <input id="ruleFile" type="hidden">
           <label>Content-Type <span class="optional">optional</span>
             <input id="ruleContentType" placeholder="application/json">
           </label>
           <label>Response body
-            <textarea id="ruleFileContent" class="response-editor" spellcheck="false" placeholder="Select a local response file to preview and edit it here."></textarea>
+            <textarea id="ruleFileContent" class="response-editor" spellcheck="false" placeholder="Edit the mapped response directly here."></textarea>
           </label>
-          <div class="response-editor-actions">
-            <span id="ruleFileState" class="cell-muted">No file loaded</span>
-            <button id="saveRuleFile" type="button" class="button ghost">Save response file</button>
-          </div>
-          <div class="form-actions">
-            <button id="cancelRule" type="button" class="button ghost">Cancel</button>
+          <span id="ruleFileState" class="cell-muted" hidden></span>
+          <div class="form-actions">            <button id="cancelRule" type="button" class="button ghost">Cancel</button>
             <button id="saveRule" type="submit" class="button primary">Add rule</button>
           </div>
           <p id="ruleFormError" class="form-error" hidden></p>
@@ -164,7 +164,7 @@
         <div id="rulesEmpty" class="empty-state page-empty">
           <div class="empty-icon">⇄</div>
           <h2>No Map Local rules</h2>
-          <p>Create a rule to replace matching upstream responses with a local file.</p>
+          <p>Create a rule to override a matching response inline.</p>
         </div>
       </section>
 
@@ -236,6 +236,13 @@
 
     <div id="trafficContextMenu" class="context-menu" role="menu" hidden>
       <button id="contextMapLocal" type="button" role="menuitem">Map Local</button>
+      <div class="context-menu-separator"></div>
+      <button id="contextCopyUrl" type="button" role="menuitem">Copy URL</button>
+      <button id="contextCopyCurl" type="button" role="menuitem">Copy as cURL</button>
+      <button id="contextCopyRequest" type="button" role="menuitem">Copy Request</button>
+      <button id="contextCopyResponse" type="button" role="menuitem">Copy Response</button>
+      <div class="context-menu-separator"></div>
+      <button id="contextClearHost" class="danger" type="button" role="menuitem">Clear requests from this host</button>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

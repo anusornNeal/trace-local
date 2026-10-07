@@ -24,3 +24,29 @@ test('BodyPreviewCollector encodes binary previews as base64', () => {
   assert.equal(snapshot.body, Buffer.from([0, 1, 2]).toString('base64'));
   assert.equal(snapshot.truncated, false);
 });
+
+test('BodyPreviewCollector decompresses gzip JSON before returning text preview', async () => {
+  const { gzipSync } = await import('node:zlib');
+  const source = '{"calendar":[],"ok":true}';
+  const compressed = gzipSync(Buffer.from(source));
+  const collector = new BodyPreviewCollector(1024);
+  collector.append(compressed);
+
+  assert.deepEqual(collector.snapshot('application/json; charset=utf-8', 'gzip'), {
+    body: source,
+    totalBytes: compressed.length,
+    encoding: 'text',
+    truncated: false,
+  });
+});
+
+test('BodyPreviewCollector keeps truncated compressed payloads as binary previews', async () => {
+  const { gzipSync } = await import('node:zlib');
+  const compressed = gzipSync(Buffer.from(JSON.stringify({ value: 'x'.repeat(1000) })));
+  const collector = new BodyPreviewCollector(4);
+  collector.append(compressed);
+
+  const snapshot = collector.snapshot('application/json', 'gzip');
+  assert.equal(snapshot.encoding, 'binary');
+  assert.equal(snapshot.truncated, true);
+});

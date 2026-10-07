@@ -52,10 +52,26 @@ function normalizePattern(pattern: string | undefined): string {
   return value;
 }
 
-function normalizeFilePath(filePath: string | undefined): string {
-  const value = filePath?.trim();
-  if (!value) throw new Error('filePath must not be empty');
-  return path.resolve(value);
+function normalizeHost(host: string | null | undefined): string | undefined {
+  if (host == null) return undefined;
+  const value = host.trim().toLowerCase();
+  return value || undefined;
+}
+
+function normalizeFilePath(filePath: string | null | undefined): string | undefined {
+  if (filePath == null) return undefined;
+  const value = filePath.trim();
+  return value ? path.resolve(value) : undefined;
+}
+
+function normalizeResponseBody(responseBody: string | null | undefined): string | undefined {
+  return responseBody == null ? undefined : responseBody;
+}
+
+function assertResponseSource(filePath: string | undefined, responseBody: string | undefined): void {
+  if (filePath === undefined && responseBody === undefined) {
+    throw new Error('Map Local rule requires responseBody or filePath');
+  }
 }
 
 export interface MatchableRequest {
@@ -84,6 +100,9 @@ export class MapRuleStore {
 
   create(input: CreateMapRuleInput): MapRule {
     const now = new Date().toISOString();
+    const filePath = normalizeFilePath(input.filePath);
+    const responseBody = normalizeResponseBody(input.responseBody);
+    assertResponseSource(filePath, responseBody);
     const rule: MapRule = {
       id: randomUUID(),
       order: this.nextOrder++,
@@ -91,10 +110,12 @@ export class MapRuleStore {
       ...(input.name?.trim() ? { name: input.name.trim() } : {}),
       target: normalizeTarget(input.target),
       pattern: normalizePattern(input.pattern),
+      ...(normalizeHost(input.host) ? { host: normalizeHost(input.host) } : {}),
       ...(normalizeMatchMode(input.matchMode) ? { matchMode: normalizeMatchMode(input.matchMode) } : {}),
       ...(input.includeSubpaths !== undefined ? { includeSubpaths: input.includeSubpaths } : {}),
       method: normalizeMethod(input.method),
-      filePath: normalizeFilePath(input.filePath),
+      ...(filePath !== undefined ? { filePath } : {}),
+      ...(responseBody !== undefined ? { responseBody } : {}),
       statusCode: normalizeStatusCode(input.statusCode),
       contentType: input.contentType?.trim() || undefined,
       ...(normalizeDelayMs(input.delayMs) !== undefined ? { delayMs: normalizeDelayMs(input.delayMs) } : {}),
@@ -110,16 +131,21 @@ export class MapRuleStore {
     if (index < 0) return undefined;
 
     const current = this.rules[index];
+    const filePath = input.filePath === undefined ? current.filePath : normalizeFilePath(input.filePath);
+    const responseBody = input.responseBody === undefined ? current.responseBody : normalizeResponseBody(input.responseBody);
+    assertResponseSource(filePath, responseBody);
     const next: MapRule = {
       ...current,
       enabled: input.enabled ?? current.enabled,
       name: input.name === undefined ? current.name : input.name?.trim() || undefined,
       target: input.target === undefined ? current.target : normalizeTarget(input.target),
       pattern: input.pattern === undefined ? current.pattern : normalizePattern(input.pattern),
+      host: input.host === undefined ? current.host : normalizeHost(input.host),
       matchMode: input.matchMode === undefined ? current.matchMode : normalizeMatchMode(input.matchMode),
       includeSubpaths: input.includeSubpaths === undefined ? current.includeSubpaths : input.includeSubpaths,
       method: input.method === undefined ? current.method : normalizeMethod(input.method),
-      filePath: input.filePath === undefined ? current.filePath : normalizeFilePath(input.filePath),
+      filePath,
+      responseBody,
       statusCode:
         input.statusCode === undefined ? current.statusCode : normalizeStatusCode(input.statusCode),
       contentType:

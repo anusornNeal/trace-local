@@ -51,7 +51,7 @@ test('app.js implements host grouping with collapse state', async () => {
     'Should check if host group is collapsed',
   );
   assert.ok(
-    appJs.match(/▸|▾/),
+    appJs.match(/▸|▾|\\u25b8|\\u25be/),
     'Should use visual indicators for collapsed/expanded state',
   );
 

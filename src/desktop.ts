@@ -163,7 +163,7 @@ function canAccessMapLocalFile(filePath: string): boolean {
   if (!daemon) return false;
   const resolved = path.resolve(filePath);
   if (lastSelectedMapFile === resolved) return true;
-  return daemon.rules.list().some((rule) => path.resolve(rule.filePath) === resolved);
+  return daemon.rules.list().some((rule) => rule.filePath && path.resolve(rule.filePath) === resolved);
 }
 
 ipcMain.handle('tracelocal:read-text-file', async (_event, filePath: unknown) => {

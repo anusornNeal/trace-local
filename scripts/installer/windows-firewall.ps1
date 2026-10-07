@@ -17,16 +17,30 @@ $ErrorActionPreference = 'Stop'
 
 $proxyRuleName = 'TraceLocal Proxy (Private)'
 $caRuleName = 'TraceLocal CA Download (Private)'
+$logPath = Join-Path (Split-Path -Parent $ProgramPath) 'tracelocal-firewall.log'
+
+function Write-TraceLog([string]$Message) {
+  try {
+    Add-Content -Path $logPath -Value ("{0:o} {1}" -f [DateTime]::Now, $Message) -ErrorAction SilentlyContinue
+  } catch {}
+}
 
 function Get-OwnedRule([string]$Name) {
-  Get-NetFirewallRule -DisplayName $Name -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
-    Select-Object -First 1
+  $rules = Get-NetFirewallRule -DisplayName $Name -PolicyStore PersistentStore -ErrorAction SilentlyContinue
+  foreach ($rule in $rules) {
+    $appFilter = $rule | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+    if ($appFilter -and [string]::Equals($appFilter.Program, $ProgramPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+      return $rule
+    }
+  }
+  return $null
 }
 
 function Test-OwnedRule([string]$Name, [int]$Port) {
   $rule = Get-OwnedRule $Name
   if (-not $rule) { return $false }
-  if (-not $rule.Enabled -or $rule.Direction -ne 'Inbound' -or $rule.Action -ne 'Allow') { return $false }
+  if ([string]$rule.Enabled -ne 'True' -or $rule.Direction -ne 'Inbound' -or $rule.Action -ne 'Allow') { return $false }
+
   $profileText = "$($rule.Profile)"
   if ($profileText -notmatch 'Private' -or $profileText -notmatch 'Public') { return $false }
 
@@ -47,65 +61,120 @@ function Test-OwnedRule([string]$Name, [int]$Port) {
 
 function Remove-OwnedRules {
   foreach ($name in @($proxyRuleName, $caRuleName)) {
-    Get-NetFirewallRule -DisplayName $name -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
-      Remove-NetFirewallRule -ErrorAction SilentlyContinue
+    $rule = Get-OwnedRule $name
+    if ($rule) {
+      Remove-NetFirewallRule -Name $rule.Name -PolicyStore PersistentStore -ErrorAction Stop
+    }
   }
 }
 
-function Remove-ConflictingInboundBlockRules {
-  $filters = Get-NetFirewallApplicationFilter -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
-    Where-Object { [string]::Equals($_.Program, $ProgramPath, [System.StringComparison]::OrdinalIgnoreCase) }
+function Get-ConflictingInboundBlockRules {
+  $rulesKey = 'HKLM\SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules'
+  $programNeedle = ('App=' + $ProgramPath + '|').ToLowerInvariant()
+  $lines = & reg.exe query $rulesKey /f $ProgramPath /s 2>$null
 
-  foreach ($filter in $filters) {
-    Get-NetFirewallRule -AssociatedNetFirewallApplicationFilter $filter -ErrorAction SilentlyContinue |
-      Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' } |
-      Remove-NetFirewallRule -ErrorAction SilentlyContinue
+  foreach ($line in $lines) {
+    if ($line -notmatch '^\s*(.+?)\s+REG_SZ\s+(.+)$') { continue }
+
+    $valueName = $matches[1].Trim()
+    $value = $matches[2]
+    $lower = $value.ToLowerInvariant()
+
+    if (
+      $lower.Contains('action=block|') -and
+      $lower.Contains('active=true|') -and
+      $lower.Contains('dir=in|') -and
+      $lower.Contains($programNeedle)
+    ) {
+      $rule = Get-NetFirewallRule -Name $valueName -PolicyStore PersistentStore -ErrorAction SilentlyContinue
+      if ($rule -and [string]$rule.Enabled -eq 'True') { $rule }
+    }
   }
 }
 
-switch ($Action) {
-  'status' {
-    if ((Test-OwnedRule $proxyRuleName $ProxyPort) -and (Test-OwnedRule $caRuleName $CaPort)) {
+function Disable-ConflictingInboundBlockRules {
+  foreach ($rule in @(Get-ConflictingInboundBlockRules)) {
+    Write-TraceLog ("Disabling conflicting rule: " + $rule.Name)
+    Set-NetFirewallRule -Name $rule.Name -PolicyStore PersistentStore -Enabled False -ErrorAction Stop
+
+    $updated = Get-NetFirewallRule -Name $rule.Name -PolicyStore PersistentStore -ErrorAction Stop
+    if ([string]$updated.Enabled -ne 'False') {
+      throw "Failed to disable conflicting firewall rule: $($rule.Name)"
+    }
+  }
+}
+
+try {
+  Write-TraceLog ("Action=$Action ProgramPath=$ProgramPath ProxyPort=$ProxyPort CaPort=$CaPort")
+
+  switch ($Action) {
+    'status' {
+      $hasConflictingBlockRule = @(Get-ConflictingInboundBlockRules).Count -gt 0
+      if (
+        -not $hasConflictingBlockRule -and
+        (Test-OwnedRule $proxyRuleName $ProxyPort) -and
+        (Test-OwnedRule $caRuleName $CaPort)
+      ) {
+        exit 0
+      }
+      exit 2
+    }
+
+    'install' {
+      Write-TraceLog 'Starting firewall repair'
+
+      Remove-OwnedRules
+      Disable-ConflictingInboundBlockRules
+
+      $proxyParams = @{
+        DisplayName = $proxyRuleName
+        Direction = 'Inbound'
+        Action = 'Allow'
+        Enabled = 'True'
+        Profile = 'Private, Public'
+        Program = $ProgramPath
+        Protocol = 'TCP'
+        LocalPort = $ProxyPort
+        RemoteAddress = 'LocalSubnet'
+        PolicyStore = 'PersistentStore'
+      }
+      New-NetFirewallRule @proxyParams | Out-Null
+
+      $caParams = @{
+        DisplayName = $caRuleName
+        Direction = 'Inbound'
+        Action = 'Allow'
+        Enabled = 'True'
+        Profile = 'Private, Public'
+        Program = $ProgramPath
+        Protocol = 'TCP'
+        LocalPort = $CaPort
+        RemoteAddress = 'LocalSubnet'
+        PolicyStore = 'PersistentStore'
+      }
+      New-NetFirewallRule @caParams | Out-Null
+
+      if (@(Get-ConflictingInboundBlockRules).Count -gt 0) {
+        throw 'Conflicting inbound block rules are still enabled after repair.'
+      }
+      if (-not (Test-OwnedRule $proxyRuleName $ProxyPort)) {
+        throw 'Proxy firewall rule could not be verified after repair.'
+      }
+      if (-not (Test-OwnedRule $caRuleName $CaPort)) {
+        throw 'CA download firewall rule could not be verified after repair.'
+      }
+
+      Write-TraceLog 'Firewall repair completed successfully'
       exit 0
     }
-    exit 2
-  }
 
-  'install' {
-    Remove-OwnedRules
-    Remove-ConflictingInboundBlockRules
-
-    $proxyParams = @{
-      DisplayName = $proxyRuleName
-      Direction = 'Inbound'
-      Action = 'Allow'
-      Enabled = 'True'
-      Profile = 'Private, Public'
-      Program = $ProgramPath
-      Protocol = 'TCP'
-      LocalPort = $ProxyPort
-      RemoteAddress = 'LocalSubnet'
+    'uninstall' {
+      Remove-OwnedRules
+      exit 0
     }
-    New-NetFirewallRule @proxyParams | Out-Null
-
-    $caParams = @{
-      DisplayName = $caRuleName
-      Direction = 'Inbound'
-      Action = 'Allow'
-      Enabled = 'True'
-      Profile = 'Private, Public'
-      Program = $ProgramPath
-      Protocol = 'TCP'
-      LocalPort = $CaPort
-      RemoteAddress = 'LocalSubnet'
-    }
-    New-NetFirewallRule @caParams | Out-Null
-
-    exit 0
   }
-
-  'uninstall' {
-    Remove-OwnedRules
-    exit 0
-  }
+} catch {
+  Write-TraceLog ("ERROR: " + $_.Exception.Message)
+  Write-Error $_
+  exit 1
 }

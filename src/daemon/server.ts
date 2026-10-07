@@ -621,7 +621,10 @@ export class TraceLocalDaemon {
     }
 
     if (url.pathname === '/api/sessions' && method === 'DELETE') {
-      sendJson(response, 200, { removed: this.store.clear() });
+      const hostParam = url.searchParams.get('host');
+      const host = hostParam?.trim();
+      const removed = hostParam === null ? this.store.clear() : (host ? this.store.removeByHost(host) : 0);
+      sendJson(response, 200, { removed });
       return;
     }
 

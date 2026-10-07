@@ -31,6 +31,10 @@ export function matchesMapRule(rule: MapRule, request: MatchableRequest): boolea
     return false;
   }
 
+  if (rule.host && rule.host.toLowerCase() !== request.host.toLowerCase()) {
+    return false;
+  }
+
   const candidate =
     rule.target === 'url'
       ? request.url

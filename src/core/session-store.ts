@@ -2,7 +2,8 @@ import type { SessionRecord, SessionSummary } from './types';
 
 export type SessionStoreEvent =
   | { type: 'session-added'; session: SessionSummary }
-  | { type: 'sessions-cleared'; removed: number };
+  | { type: 'sessions-cleared'; removed: number }
+  | { type: 'sessions-removed'; removed: number; ids: string[]; host?: string };
 
 export type SessionStoreListener = (event: SessionStoreEvent) => void;
 
@@ -83,6 +84,16 @@ export class SessionStore {
   records(limit = this.maxSessions): SessionRecord[] {
     const normalizedLimit = Math.max(0, Math.min(this.maxSessions, Math.floor(limit)));
     return this.recordsState.slice(0, normalizedLimit).map(cloneRecord);
+  }
+
+  removeByHost(host: string): number {
+    const ids = this.recordsState.filter((item) => item.host === host).map((item) => item.id);
+    if (ids.length === 0) return 0;
+    const idSet = new Set(ids);
+    const kept = this.recordsState.filter((item) => !idSet.has(item.id));
+    this.recordsState.splice(0, this.recordsState.length, ...kept);
+    this.emit({ type: 'sessions-removed', removed: ids.length, ids, host });
+    return ids.length;
   }
 
   clear(): number {

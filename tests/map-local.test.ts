@@ -488,3 +488,55 @@ test('Map Local applies persisted exact subpath matching and response delay', as
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+
+test('Map Local inline responses can be scoped to host while matching path only', async () => {
+  const upstream = http.createServer((_request, response) => {
+    response.statusCode = 418;
+    response.end('upstream');
+  });
+  const upstreamPort = await listen(upstream);
+  const sessions = new SessionStore(10);
+  const rules = new MapRuleStore();
+  const host = `127.0.0.1:${upstreamPort}`;
+  const rule = rules.create({
+    target: 'path',
+    host,
+    pattern: '/profile',
+    matchMode: 'exact',
+    method: 'GET',
+    responseBody: JSON.stringify({ source: 'inline' }),
+    statusCode: 201,
+  });
+
+  assert.equal(rules.findMatch({
+    method: 'GET',
+    url: `http://${host}/profile`,
+    host,
+    path: '/profile',
+  })?.id, rule.id);
+  assert.equal(rules.findMatch({
+    method: 'GET',
+    url: 'http://other.test/profile',
+    host: 'other.test',
+    path: '/profile',
+  }), undefined);
+
+  const proxy = new HttpCaptureProxy(sessions, {
+    host: '127.0.0.1',
+    port: 0,
+    ruleStore: rules,
+  });
+
+  try {
+    const status = await proxy.start();
+    const mapped = await proxyRequest(status.port, `http://${host}/profile`);
+    assert.equal(mapped.statusCode, 201);
+    assert.equal(mapped.body, '{"source":"inline"}');
+    assert.equal(mapped.headers['content-type'], 'application/json; charset=utf-8');
+    assert.equal(mapped.headers['x-tracelocal-map-rule'], rule.id);
+  } finally {
+    await proxy.stop();
+    await close(upstream);
+  }
+});

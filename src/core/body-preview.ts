@@ -1,3 +1,5 @@
+import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
+
 export interface BodyPreviewSnapshot {
   body: string | null;
   totalBytes: number;
@@ -9,6 +11,30 @@ const TEXT_CONTENT_TYPE = /^(text\/|application\/(json|.*\+json|xml|.*\+xml|x-ww
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function decompressPreview(
+  buffer: Buffer,
+  contentEncoding: string | undefined,
+  maxOutputLength: number,
+): Buffer | null {
+  if (!contentEncoding || contentEncoding === 'identity') return buffer;
+
+  try {
+    if (contentEncoding === 'gzip' || contentEncoding === 'x-gzip') {
+      return gunzipSync(buffer, { maxOutputLength });
+    }
+    if (contentEncoding === 'deflate') {
+      return inflateSync(buffer, { maxOutputLength });
+    }
+    if (contentEncoding === 'br') {
+      return brotliDecompressSync(buffer, { maxOutputLength });
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 export class BodyPreviewCollector {
@@ -51,13 +77,33 @@ export class BodyPreviewCollector {
     const buffer = Buffer.concat(this.chunks);
     const contentType = firstHeaderValue(contentTypeHeader)?.split(';', 1)[0]?.trim() ?? '';
     const contentEncoding = firstHeaderValue(contentEncodingHeader)?.trim().toLowerCase();
-    const isText = (!contentEncoding || contentEncoding === 'identity') && TEXT_CONTENT_TYPE.test(contentType);
+    const isTextType = TEXT_CONTENT_TYPE.test(contentType);
+    const truncated = this.totalBytes > this.previewBytes;
+
+    let textBuffer: Buffer | null = null;
+    if (isTextType) {
+      if (!contentEncoding || contentEncoding === 'identity') {
+        textBuffer = buffer;
+      } else if (!truncated) {
+        const maxDecodedBytes = Math.max(this.maxPreviewBytes * 4, 256 * 1024);
+        textBuffer = decompressPreview(buffer, contentEncoding, maxDecodedBytes);
+      }
+    }
+
+    if (textBuffer) {
+      return {
+        body: textBuffer.toString('utf8'),
+        totalBytes: this.totalBytes,
+        encoding: 'text',
+        truncated,
+      };
+    }
 
     return {
-      body: isText ? buffer.toString('utf8') : buffer.toString('base64'),
+      body: buffer.toString('base64'),
       totalBytes: this.totalBytes,
-      encoding: isText ? 'text' : 'binary',
-      truncated: this.totalBytes > this.previewBytes,
+      encoding: 'binary',
+      truncated,
     };
   }
 }

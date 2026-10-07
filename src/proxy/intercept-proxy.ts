@@ -12,7 +12,7 @@ import { BodyPreviewCollector } from '../core/body-preview';
 import { SessionStore } from '../core/session-store';
 import type { ProxyStatus, SessionRecord } from '../core/types';
 import type { CertificateAuthorityMaterial } from '../certificates/ca-manager';
-import { readMappedFile } from '../map-local/file-response';
+import { readMappedResponse } from '../map-local/file-response';
 import { matchesMapRule } from '../map-local/matcher';
 import { MapRuleStore } from '../map-local/rule-store';
 import { getLanIpAddress } from '../core/network';
@@ -118,6 +118,14 @@ export class InterceptProxy {
       const authority = new URL(`http://${rawHost}`);
       return Number(authority.port || 80) === port && this.protectedControl.hosts.has(normalizeControlHost(authority.hostname));
     } catch { return false; }
+  }
+
+  private trackActiveClient(remoteIpAddress: string | undefined): void {
+    if (!remoteIpAddress || isLoopback(remoteIpAddress)) return;
+    const normalized = remoteIpAddress.toLowerCase().startsWith('::ffff:')
+      ? remoteIpAddress.slice('::ffff:'.length)
+      : remoteIpAddress;
+    this.activeClients.set(normalized, Date.now());
   }
 
   getActiveClientCount(now = Date.now()): number {
@@ -257,7 +265,7 @@ export class InterceptProxy {
             if (rule.delayMs && rule.delayMs > 0) {
               await new Promise<void>((resolve) => setTimeout(resolve, rule.delayMs));
             }
-            const mapped = await readMappedFile(rule.filePath, rule.contentType);
+            const mapped = await readMappedResponse(rule);
             return {
               statusCode: rule.statusCode,
               statusMessage: 'Mapped',
@@ -308,9 +316,7 @@ export class InterceptProxy {
 
   private async subscribeCaptureEvents(server: Mockttp): Promise<void> {
     await server.on('request-initiated', (request) => {
-      if (request.remoteIpAddress && !isLoopback(request.remoteIpAddress)) {
-        this.activeClients.set(request.remoteIpAddress, Date.now());
-      }
+      this.trackActiveClient(request.remoteIpAddress);
       this.captures.set(request.id, {
         request,
         requestBody: new BodyPreviewCollector(this.options.maxBodyPreviewBytes),
@@ -323,6 +329,7 @@ export class InterceptProxy {
     });
 
     await server.on('request', (request: CompletedRequest) => {
+      this.trackActiveClient(request.remoteIpAddress);
       let state = this.captures.get(request.id);
       if (!state) {
         state = {
@@ -364,6 +371,7 @@ export class InterceptProxy {
     });
 
     await server.on('abort', (request: AbortedRequest) => {
+      this.trackActiveClient(request.remoteIpAddress);
       let state = this.captures.get(request.id);
       if (!state) {
         state = {

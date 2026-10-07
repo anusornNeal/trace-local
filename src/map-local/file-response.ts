@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { MapRule } from '../core/types';
 
 const CONTENT_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
@@ -28,6 +29,17 @@ export interface MappedFileResponse {
   contentType: string;
 }
 
+function inferInlineContentType(body: string): string {
+  const trimmed = body.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      JSON.parse(trimmed);
+      return 'application/json; charset=utf-8';
+    } catch {}
+  }
+  return 'text/plain; charset=utf-8';
+}
+
 export async function readMappedFile(
   filePath: string,
   explicitContentType?: string,
@@ -42,4 +54,19 @@ export async function readMappedFile(
       CONTENT_TYPES[extension] ||
       'application/octet-stream',
   };
+}
+
+export async function readMappedResponse(rule: MapRule): Promise<MappedFileResponse> {
+  if (rule.responseBody !== undefined) {
+    return {
+      body: Buffer.from(rule.responseBody, 'utf8'),
+      contentType: rule.contentType?.trim() || inferInlineContentType(rule.responseBody),
+    };
+  }
+
+  if (rule.filePath) {
+    return readMappedFile(rule.filePath, rule.contentType);
+  }
+
+  throw new Error('Map Local rule has no response body or file');
 }

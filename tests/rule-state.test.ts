@@ -111,3 +111,31 @@ test('RuleStateRepository recovery does not mask filesystem failures', async () 
     await rm(dataDir, { recursive: true, force: true });
   }
 });
+
+
+test('RuleStateRepository round-trips inline response rules without file paths', async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-state-inline-'));
+  const repository = new RuleStateRepository(dataDir);
+  const inline: MapRule = {
+    id: 'inline-one',
+    order: 1,
+    enabled: true,
+    target: 'path',
+    pattern: '/profile',
+    host: 'api.example.test',
+    matchMode: 'exact',
+    method: 'GET',
+    responseBody: '{"ok":true}',
+    statusCode: 200,
+    contentType: 'application/json',
+    createdAt: '2026-10-06T00:00:00.000Z',
+    updatedAt: '2026-10-06T00:00:00.000Z',
+  };
+
+  try {
+    await repository.save([inline]);
+    assert.deepEqual(await repository.load(), [inline]);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

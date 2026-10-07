@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { BodyPreviewCollector } from '../core/body-preview';
 import { SessionStore } from '../core/session-store';
 import type { ProxyStatus, SessionRecord } from '../core/types';
-import { readMappedFile } from '../map-local/file-response';
+import { readMappedResponse } from '../map-local/file-response';
 import { MapRuleStore } from '../map-local/rule-store';
 import { getLanIpAddress } from '../core/network';
 
@@ -270,7 +270,7 @@ export class HttpCaptureProxy {
       request.once('end', () => {
         void (async () => {
           try {
-            const mapped = await readMappedFile(matchedRule.filePath, matchedRule.contentType);
+            const mapped = await readMappedResponse(matchedRule);
             responseBody.append(mapped.body);
             const headers = {
               'content-type': mapped.contentType,

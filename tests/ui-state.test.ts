@@ -45,7 +45,7 @@ function inspector() {
     },
   });
   // Expose closure functions only in this VM; the production renderer has no testing API.
-  const script = readFileSync('src/ui/app.js', 'utf8').replace(/\}\)\(\);\s*$/, 'globalThis.inspector = { state, loadBootstrap, curlFor }; })();');
+  const script = readFileSync('src/ui/app.js', 'utf8').replace(/\}\)\(\);\s*$/, 'globalThis.inspector = { state, loadBootstrap, curlFor, bodyText, isJsonBody }; })();');
   vm.runInContext(script, context);
   return {
     context, elements, events: Events.current,
@@ -111,4 +111,19 @@ test('copy cURL quotes untrusted HTTP method tokens as well as headers and URL',
   const command = ui.context.inspector.curlFor({ ...session('curl'), method: 'GET`whoami`', requestHeaders: { 'x-value': "a'b" } });
   assert.match(command, /^curl -X 'GET`whoami`'/);
   assert.ok(command.includes("'x-value: a'\\''b'"));
+});
+
+test('JSON bodies are pretty-printed while malformed JSON falls back to raw text', async () => {
+  const ui = inspector();
+  await tick();
+
+  const pretty = ui.context.inspector.bodyText('{"a":1,"nested":{"b":2}}', 'utf8', {
+    'content-type': 'application/json; charset=utf-8',
+  });
+  assert.equal(pretty, '{\n  "a": 1,\n  "nested": {\n    "b": 2\n  }\n}');
+
+  const raw = ui.context.inspector.bodyText('not-json', 'utf8', {
+    'content-type': 'application/json',
+  });
+  assert.equal(raw, 'not-json');
 });
