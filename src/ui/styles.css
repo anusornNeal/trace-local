@@ -20,12 +20,12 @@
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; min-width: 100%; min-height: 100%; background: var(--bg); color: var(--text); }
+html, body { margin: 0; min-width: 100%; height: 100%; min-height: 100%; overflow: hidden; background: var(--bg); color: var(--text); }
 body { font-size: 13px; }
 button, input, select { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { color: inherit; }
-.app-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.app-shell { height: 100vh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
   height: 60px; display: flex; align-items: center; justify-content: space-between; position: relative;
   padding: 0 18px; border-bottom: 1px solid var(--line); background: rgba(10,13,17,.96);
@@ -665,8 +665,10 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
 .map-local-panel { overflow: hidden; }
 .map-local-workspace {
   height: 100%;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(360px, 34%) minmax(0, 66%);
+  overflow: hidden;
   background: var(--bg);
 }
 .map-rules-pane {
@@ -674,6 +676,7 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   padding: 16px;
   border-right: 1px solid var(--line);
   background: #0c1117;
@@ -718,7 +721,9 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
   min-height: 0;
   max-width: none;
   margin: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   border-radius: 8px;
   background: var(--panel);
 }
@@ -898,7 +903,9 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
 .map-detail-scroll {
   min-height: 0;
   flex: 1;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 .map-detail-section {
   padding: 18px;
@@ -979,7 +986,8 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
 .map-response-editor {
   min-height: 340px;
   max-height: none;
-  resize: vertical;
+  resize: none;
+  overflow: hidden;
 }
 
 .json-editor-shell {
@@ -999,7 +1007,8 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
   margin: 0;
   padding: 12px;
   pointer-events: none;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: #c9d4df;
   font: 11px/1.5 "Cascadia Code", Consolas, monospace;
   tab-size: 2;
@@ -1014,8 +1023,9 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
   color: transparent;
   caret-color: #edf2f8;
   -webkit-text-fill-color: transparent;
-  white-space: pre;
-  overflow: auto;
+  white-space: pre-wrap;
+  overflow: hidden;
+  overflow-wrap: anywhere;
   tab-size: 2;
 }
 .json-editor-input::placeholder {

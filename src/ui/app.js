@@ -811,8 +811,10 @@
     const input = $('#ruleFileContent');
     const highlight = $('#ruleFileHighlight');
     if (!input || !highlight) return;
+
+    input.style.height = 'auto';
+    input.style.height = Math.max(340, input.scrollHeight) + 'px';
     highlight.innerHTML = highlightRuleBodySource(input.value) + '\n';
-    highlight.style.transform = 'translate(' + (-input.scrollLeft) + 'px, ' + (-input.scrollTop) + 'px)';
   }
 
   function setRuleBodyValue(value) {
