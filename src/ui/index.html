@@ -177,16 +177,10 @@
           </div>
         </div>
 
-        <div class="settings-grid">
-          <article class="settings-card">
-            <h2>Proxy</h2>
-            <div class="setting-row"><span>Address</span><code id="proxyUrl">—</code><button class="copy-button" data-copy="proxyUrl">Copy</button></div>
-            <div class="setting-row"><span>Status</span><strong id="proxyStatus">—</strong></div>
-            <div class="setting-row"><span>Captured</span><strong id="sessionCount">0 requests</strong></div>
-          </article>
-
-          <article class="settings-card">
-            <h2>HTTPS Certificate Authority</h2>
+        <div class="settings-grid settings-grid-v2">
+          <article class="settings-card settings-certificate-card">
+            <p class="settings-section-label">HTTPS Certificate Authority</p>
+            <h2>Certificate</h2>
             <div class="setting-row stacked"><span>Certificate path</span><code id="caPath">—</code><button class="copy-button" data-copy="caPath">Copy</button></div>
             <div class="setting-row stacked"><span>SHA-256 fingerprint</span><code id="caFingerprint">—</code><button class="copy-button" data-copy="caFingerprint">Copy</button></div>
             <div class="setting-row"><span>Expires</span><strong id="caExpiry">—</strong></div>
@@ -195,15 +189,27 @@
             </div>
           </article>
 
-          <article class="settings-card">
-            <h2>Mobile setup</h2>
+          <article class="settings-card settings-mobile-card">
+            <p class="settings-section-label">Mobile setup</p>
+            <h2>Connect a mobile device</h2>
             <p class="mobile-flow-copy">Set the phone's Wi-Fi proxy manually, then install the Trace Local CA. No mobile app is required.</p>
-            <div class="setting-row"><span>Proxy LAN address</span><code id="mobileProxyAddress">—</code><button class="copy-button" data-copy="mobileProxyAddress">Copy</button></div>
-            <div class="setting-row"><span>Active proxy clients</span><strong id="connectedDevices">0 active</strong></div>
+
+            <div class="settings-summary">
+              <div class="settings-summary-item">
+                <span>Proxy LAN address</span>
+                <code id="mobileProxyAddress">—</code>
+              </div>
+              <div class="settings-summary-item">
+                <span>Active proxy clients</span>
+                <strong id="connectedDevices">0 active</strong>
+              </div>
+            </div>
+
             <div class="manual-mobile-steps">
               <div><strong>Android</strong><span>Wi-Fi network → Proxy → Manual → enter the host and port above.</span></div>
               <div><strong>iPhone / iPad</strong><span>Wi-Fi → current network → Configure Proxy → Manual → enter the host and port above.</span></div>
             </div>
+
             <div class="mobile-ca-download">
               <h3>Install CA on mobile</h3>
               <p>Generate a short-lived QR code, scan it with the phone, then download and install the certificate manually.</p>
@@ -219,13 +225,15 @@
               </div>
               <button id="generateQr" class="button primary">Show CA download QR</button>
             </div>
+
             <div class="notice mobile-notice">
               The QR code only opens the CA download URL. It does not change Wi-Fi proxy settings or install/trust the certificate automatically.
             </div>
           </article>
 
-          <article class="settings-card">
-            <h2>Runtime</h2>
+          <article class="settings-card settings-runtime-card">
+            <p class="settings-section-label">Runtime</p>
+            <h2>Local process</h2>
             <div class="setting-row"><span>Version</span><code id="runtimeVersion">—</code></div>
             <div class="setting-row"><span>Control UI</span><code id="controlUrl">—</code></div>
             <div class="setting-row"><span>Live updates</span><strong id="sseStatus">Connecting</strong></div>

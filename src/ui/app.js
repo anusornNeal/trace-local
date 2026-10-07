@@ -123,9 +123,12 @@
     $('#proxyListeningText').textContent = s.proxy?.running
       ? 'TraceLocal | Listening on ' + proxy.replace(/^https?:\/\//, '')
       : 'TraceLocal | ' + proxyStatus;
-    $('#proxyUrl').textContent = proxy;
-    $('#proxyStatus').textContent = proxyStatus;
-    $('#sessionCount').textContent = s.sessions + (s.sessions === 1 ? ' request' : ' requests');
+    const proxyUrlElement = $('#proxyUrl');
+    if (proxyUrlElement) proxyUrlElement.textContent = proxy;
+    const proxyStatusElement = $('#proxyStatus');
+    if (proxyStatusElement) proxyStatusElement.textContent = proxyStatus;
+    const sessionCountElement = $('#sessionCount');
+    if (sessionCountElement) sessionCountElement.textContent = s.sessions + (s.sessions === 1 ? ' request' : ' requests');
     $('#runtimeVersion').textContent = s.version || '\u2014';
     $('#controlUrl').textContent = location.origin;
     $('#trafficCount').textContent = String(state.sessions.length);
@@ -143,7 +146,9 @@
     pill.classList.toggle('live', state.connected);
     pill.classList.toggle('muted', !state.connected);
     pill.innerHTML = '<span class="dot"></span>' + (state.connected ? 'Live' : 'Reconnecting');
-    $('#sseStatus').textContent = state.connected ? 'Connected' : 'Reconnecting';
+    const sseStatus = $('#sseStatus');
+    sseStatus.textContent = state.connected ? 'Connected' : 'Reconnecting';
+    sseStatus.classList.toggle('connected', state.connected);
   }
 
   function sessionMatches(session) {
