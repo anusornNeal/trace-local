@@ -77,8 +77,20 @@ function validateRule(value: unknown, index: number): MapRule {
   if (rule.name !== undefined && typeof rule.name !== 'string') {
     throw new Error(`rules[${index}].name must be a string`);
   }
-  if (rule.matchMode !== undefined && rule.matchMode !== 'wildcard' && rule.matchMode !== 'exact') {
-    throw new Error(`rules[${index}].matchMode must be wildcard or exact`);
+  if (
+    rule.matchMode !== undefined &&
+    rule.matchMode !== 'wildcard' &&
+    rule.matchMode !== 'exact' &&
+    rule.matchMode !== 'regex'
+  ) {
+    throw new Error(`rules[${index}].matchMode must be wildcard, exact, or regex`);
+  }
+  if (rule.matchMode === 'regex') {
+    try {
+      new RegExp(rule.pattern);
+    } catch {
+      throw new Error(`rules[${index}].pattern must be a valid regular expression`);
+    }
   }
   if (rule.includeSubpaths !== undefined && typeof rule.includeSubpaths !== 'boolean') {
     throw new Error(`rules[${index}].includeSubpaths must be boolean`);

@@ -132,22 +132,26 @@ test('Traffic P0 inspector exposes resizers, sorting, structured detail, and con
 });
 
 
-test('Map Local edits captured responses inline with path-only host-scoped matching', async () => {
+test('Map Local edits captured responses with full URL matching and autosave', async () => {
   const [html, ui] = await Promise.all([
     read('src/ui/index.html'),
     read('src/ui/app.js'),
   ]);
 
-  assert.match(html, /id="ruleHost" type="hidden"/);
+  assert.match(html, /id="rulePattern"/);
+  assert.match(html, /<option value="wildcard">Wildcard<\/option>/);
+  assert.match(html, /<option value="regex">Regex<\/option>/);
+  assert.match(html, /id="ruleSaveState"/);
   assert.match(html, /Edit the mapped response directly here/);
   assert.doesNotMatch(html, /id="browseFile"/);
   assert.doesNotMatch(html, /id="loadRuleFile"/);
   assert.doesNotMatch(html, /id="saveRuleFile"/);
-  assert.match(ui, /ruleTarget'\)\.value = 'path'/);
-  assert.match(ui, /ruleHost'\)\.value = summary\.host/);
-  assert.match(ui, /rulePattern'\)\.value = summary\.path/);
+  assert.match(ui, /target: 'url'/);
+  assert.match(ui, /pattern: summary\.url/);
+  assert.match(ui, /matchMode: 'exact'/);
+  assert.match(ui, /scheduleRuleSave/);
+  assert.match(ui, /event\.key\.toLowerCase\(\) === 's'/);
   assert.match(ui, /responseBody: \$\('#ruleFileContent'\)\.value/);
-  assert.match(ui, /host: \$\('#ruleHost'\)\.value/);
 });
 
 test('domain sidebar supports persistent favorites pinned above other domains', async () => {

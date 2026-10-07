@@ -19,6 +19,9 @@
     contextSessionId: null,
     editingRuleId: null,
     ruleFileLoadedPath: null,
+    ruleSaveTimer: null,
+    ruleSaveInFlight: false,
+    ruleSavePending: false,
     pendingBootstrap: null,
     trafficSort: { key: 'startedAt', direction: 'desc' },
     paneWidths: { domains: 190, detail: 390 },
@@ -116,7 +119,8 @@
     if (!s) return;
     const proxy = s.proxy?.lanUrl || s.proxy?.proxyUrl || 'Proxy unavailable';
     const proxyStatus = s.proxy?.running ? 'Proxy Ready' : (s.proxy?.error || 'Proxy Stopped');
-    $('#proxySummary').textContent = `${proxy} \u00b7 ${proxyStatus}`;
+    const proxySummary = $('#proxySummary');
+    if (proxySummary) proxySummary.textContent = `${proxy} \u00b7 ${proxyStatus}`;
     const listening = $('#proxyListening');
     listening.classList.toggle('active', Boolean(s.proxy?.running));
     listening.classList.toggle('error', !s.proxy?.running);
@@ -324,24 +328,16 @@
       closeTrafficContextMenu();
       return;
     }
+
     const mapTab = $('.tab[data-tab="map"]');
     mapTab?.click();
-    resetRuleEditor();
-    const form = $('#ruleForm');
-    form.reset();
-    $('#ruleTarget').value = 'path';
-    $('#ruleHost').value = summary.host || '';
-    $('#rulePattern').value = summary.path || '/';
-    $('#ruleMethod').value = summary.method || '*';
-    $('#ruleMatchMode').value = 'exact';
-    $('#ruleName').value = (summary.method || '*') + ' ' + (summary.path || '/');
-    $('#ruleStatus').value = String(summary.statusCode || 200);
-    $('#ruleFile').value = '';
-    $('#ruleFileContent').value = '';
-    $('#ruleContentType').value = '';
-    form.hidden = false;
     closeTrafficContextMenu();
-    $('#rulePattern').focus();
+
+    if (!(await flushRuleSave())) {
+      toast('Fix the current rule before creating another Map Local rule');
+      return;
+    }
+
     try {
       const session = state.selected?.id === sessionId && state.selected.responseHeaders
         ? state.selected
@@ -350,16 +346,39 @@
         toast('Binary response cannot be edited inline yet');
         return;
       }
+
       let body = session.responseBody ?? '';
       if (isJsonBody(body, session.responseHeaders)) {
         try { body = JSON.stringify(JSON.parse(body), null, 2); } catch {}
       }
-      $('#ruleFileContent').value = body;
-      $('#ruleStatus').value = String(session.statusCode || summary.statusCode || 200);
       const rawContentType = session.responseHeaders?.['content-type'] ?? session.responseHeaders?.['Content-Type'] ?? '';
-      $('#ruleContentType').value = Array.isArray(rawContentType) ? (rawContentType[0] || '') : String(rawContentType || '');
+      const contentType = Array.isArray(rawContentType) ? (rawContentType[0] || '') : String(rawContentType || '');
+
+      const saved = await api('/api/rules', {
+        method: 'POST',
+        body: JSON.stringify({
+          enabled: true,
+          name: (summary.method || '*') + ' ' + (summary.path || '/'),
+          target: 'url',
+          pattern: summary.url,
+          matchMode: 'exact',
+          includeSubpaths: false,
+          method: summary.method || '*',
+          responseBody: body,
+          statusCode: session.statusCode || summary.statusCode || 200,
+          contentType: contentType || undefined,
+          delayMs: 0,
+        }),
+      });
+
+      if (saved && !state.rules.some((rule) => rule.id === saved.id)) {
+        state.rules = [...state.rules, saved].sort((a, b) => a.order - b.order);
+      }
+      openRuleEditor(saved.id);
+      renderRules();
+      toast('Map Local rule created');
     } catch (error) {
-      toast('Could not load captured response: ' + error.message);
+      toast('Could not create Map Local rule: ' + error.message);
     }
   }
 
@@ -622,44 +641,91 @@
     }
   }
 
-  function ruleResponseSummary(rule) {
-    if (rule.responseBody !== undefined) {
-      const size = typeof Blob !== 'undefined' ? new Blob([rule.responseBody]).size : String(rule.responseBody).length;
-      return { title: 'Inline response', detail: formatBytes(size) + (rule.contentType ? ' | ' + rule.contentType : '') };
+  function ruleFullPattern(rule) {
+    if (rule.target === 'url') return rule.pattern;
+    if (rule.target === 'path') {
+      const pathValue = rule.pattern.startsWith('/') ? rule.pattern : '/' + rule.pattern;
+      if (rule.host) return 'https://' + rule.host + pathValue;
+      const capture = state.sessions.find((session) =>
+        session.mapRuleId === rule.id ||
+        (session.path === rule.pattern && (rule.method === '*' || session.method === rule.method))
+      );
+      if (capture?.host) return (capture.protocol || 'https') + '://' + capture.host + pathValue;
+      return rule.pattern;
     }
-    if (rule.filePath) {
-      return { title: rule.filePath.split(/[\\/]/).pop() || 'Local file', detail: rule.filePath };
+    if (rule.target === 'host') {
+      return 'https://' + rule.pattern + (rule.includeSubpaths ? '/*' : '/');
     }
-    return { title: 'No response', detail: '' };
+    return rule.pattern;
   }
+
+  function ruleListPath(rule) {
+    const pattern = ruleFullPattern(rule);
+    if (rule.matchMode === 'regex') return pattern;
+    return pattern.replace(/^https?:\/\/[^/]+/i, '') || '/';
+  }
+
+  function methodBadgeClass(method) {
+    const normalized = String(method || '*').toLowerCase();
+    return ['post', 'put', 'patch', 'delete'].includes(normalized) ? ' ' + normalized : '';
+  }
+
   function renderRules() {
     $('#ruleCount').textContent = String(state.rules.length);
-    $('#rulesEmpty').classList.toggle('visible', state.rules.length === 0);
-    $('#ruleList').innerHTML = state.rules.map((rule) => {
-      const response = ruleResponseSummary(rule);
+    const query = ($('#ruleSearch')?.value || '').trim().toLowerCase();
+    const method = $('#ruleMethodFilter')?.value || '';
+    const sort = $('#ruleSort')?.value || 'order';
+
+    let visibleRules = state.rules.filter((rule) => {
+      if (method && rule.method !== method) return false;
+      if (!query) return true;
+      return [rule.name, ruleFullPattern(rule), rule.method, rule.matchMode]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+
+    if (sort === 'url-asc' || sort === 'url-desc') {
+      const direction = sort === 'url-asc' ? 1 : -1;
+      visibleRules = [...visibleRules].sort((a, b) =>
+        ruleFullPattern(a).localeCompare(ruleFullPattern(b)) * direction
+      );
+    } else {
+      visibleRules = [...visibleRules].sort((a, b) => a.order - b.order);
+    }
+
+    const empty = $('#rulesEmpty');
+    empty.classList.toggle('visible', visibleRules.length === 0);
+    const emptyTitle = empty.querySelector?.('h2');
+    const emptyCopy = empty.querySelector?.('p');
+    if (state.rules.length && visibleRules.length === 0) {
+      if (emptyTitle) emptyTitle.textContent = 'No matching rules';
+      if (emptyCopy) emptyCopy.textContent = 'Try a different search or method filter.';
+    } else {
+      if (emptyTitle) emptyTitle.textContent = 'No Map Local rules';
+      if (emptyCopy) emptyCopy.textContent = 'Create a rule to override a matching response inline.';
+    }
+
+    $('#ruleList').innerHTML = visibleRules.map((rule) => {
+      const displayPath = ruleListPath(rule);
+      const detail = rule.name || ((rule.matchMode || 'wildcard') + ' match');
       return '<div class="rule-row ' + (state.editingRuleId === rule.id ? 'selected' : '') + '" data-rule="' + escapeHtml(rule.id) + '" tabindex="0" role="button" aria-label="Edit Map Local rule">' +
-        '<button class="switch ' + (rule.enabled ? 'on' : '') + '" data-toggle aria-label="' + (rule.enabled ? 'Disable' : 'Enable') + ' rule"></button>' +
-        '<span class="method">' + escapeHtml(rule.method) + '</span>' +
-        '<span class="rule-main"><strong>' + escapeHtml(rule.name || (rule.target.toUpperCase() + ' | ' + rule.pattern)) + '</strong><span>' + escapeHtml(rule.pattern + (rule.delayMs ? ' | ' + rule.delayMs + ' ms delay' : '')) + '</span></span>' +
-        '<span class="rule-main"><strong>' + escapeHtml(response.title) + '</strong><span>' + escapeHtml(response.detail) + '</span></span>' +
-        '<span class="status-code s' + String(rule.statusCode)[0] + '">' + rule.statusCode + '</span>' +
-        '<button class="icon-button" data-delete aria-label="Delete rule">Delete</button>' +
+        '<span class="method-badge' + methodBadgeClass(rule.method) + '">' + escapeHtml(rule.method) + '</span>' +
+        '<span class="rule-main"><strong>' + escapeHtml(displayPath) + '</strong><span>' + escapeHtml(detail) + '</span></span>' +
+        '<button class="switch ' + (rule.enabled ? 'on' : '') + '" data-toggle type="button" role="switch" aria-checked="' + String(rule.enabled) + '" aria-label="' + (rule.enabled ? 'Disable' : 'Enable') + ' rule"></button>' +
+        '<span class="rule-more" aria-hidden="true">⋮</span>' +
       '</div>';
     }).join('');
+
     $$('#ruleList [data-rule]').forEach((row) => {
       row.querySelector('[data-toggle]').addEventListener('click', (event) => {
         event.stopPropagation();
-        toggleRule(row.dataset.rule);
+        void toggleRule(row.dataset.rule);
       });
-      row.querySelector('[data-delete]').addEventListener('click', (event) => {
-        event.stopPropagation();
-        deleteRule(row.dataset.rule);
-      });
-      row.addEventListener('click', () => openRuleEditor(row.dataset.rule));
+      row.addEventListener('click', () => void selectRuleForEditing(row.dataset.rule));
       row.addEventListener('keydown', (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          openRuleEditor(row.dataset.rule);
+          void selectRuleForEditing(row.dataset.rule);
         }
       });
     });
@@ -683,44 +749,121 @@
     }
   }
 
+  function setRuleSaveState(kind, message) {
+    const element = $('#ruleSaveState');
+    if (!element) return;
+    element.className = 'rule-save-state ' + kind;
+    element.innerHTML = '<span class="dot"></span><span>' + escapeHtml(message) + '</span><kbd>Ctrl+S</kbd>';
+  }
+
+  function updateRuleMatchHint() {
+    const hint = $('#ruleMatchHint');
+    const pattern = $('#rulePattern');
+    const mode = $('#ruleMatchMode').value;
+    if (!hint || !pattern) return;
+
+    hint.className = 'map-match-hint';
+    pattern.classList.remove('invalid');
+
+    if (mode === 'wildcard') {
+      hint.textContent = 'Wildcard: * matches any sequence, ? matches one character.';
+      $('#ruleIncludeSubpaths').disabled = false;
+      return;
+    }
+    if (mode === 'regex') {
+      $('#ruleIncludeSubpaths').checked = false;
+      $('#ruleIncludeSubpaths').disabled = true;
+      try {
+        new RegExp(pattern.value);
+        hint.textContent = 'Valid regular expression. Include the domain in the pattern.';
+        hint.classList.add('valid');
+      } catch {
+        hint.textContent = 'Invalid regular expression.';
+        hint.classList.add('invalid');
+        pattern.classList.add('invalid');
+      }
+      return;
+    }
+
+    $('#ruleIncludeSubpaths').disabled = false;
+    hint.textContent = 'Matches this full URL exactly.';
+  }
+
+  function syncRuleEditorHeader(rule) {
+    if (!rule) return;
+    const method = rule.method || '*';
+    const title = ruleFullPattern(rule);
+    const badge = $('#ruleMethodBadge');
+    badge.textContent = method;
+    badge.className = 'method-badge' + methodBadgeClass(method);
+    $('#ruleDetailTitle').textContent = title;
+    $('#ruleIdentity').textContent = (rule.name || 'Map Local rule') + ' · order ' + rule.order +
+      (rule.updatedAt ? ' · updated ' + new Date(rule.updatedAt).toLocaleTimeString() : '');
+    $('#ruleEnabledText').textContent = rule.enabled ? 'Enabled' : 'Disabled';
+  }
+
   function resetRuleEditor() {
+    clearTimeout(state.ruleSaveTimer);
+    state.ruleSaveTimer = null;
+    state.ruleSavePending = false;
     state.editingRuleId = null;
-    $('#ruleForm').reset();
-    $('#ruleEnabled').checked = true;
-    $('#ruleMethod').value = '*';
-    $('#ruleMatchMode').value = 'wildcard';
-    $('#ruleIncludeSubpaths').checked = false;
-    $('#ruleDelay').value = '0';
-    $('#ruleStatus').value = '200';
-    $('#ruleHost').value = '';
-    $('#ruleFile').value = '';
-    $('#ruleFileContent').value = '';
     state.ruleFileLoadedPath = null;
-    $('#ruleFileState').textContent = '';
-    $('#ruleFormTitle').textContent = 'New rule';
-    $('#ruleIdentity').textContent = '';
-    $('#saveRule').textContent = 'Add rule';
+    $('#ruleForm').hidden = true;
+    $('#ruleDetailEmpty').hidden = false;
     $('#ruleFormError').hidden = true;
     renderRules();
+  }
+
+  async function flushRuleSave() {
+    if (!state.editingRuleId) return true;
+
+    if (state.ruleSaveInFlight) {
+      state.ruleSavePending = true;
+      while (state.ruleSaveInFlight) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+
+    if (state.ruleSaveTimer || state.ruleSavePending) {
+      state.ruleSavePending = false;
+      await saveEditingRule();
+    }
+
+    return $('#ruleFormError').hidden;
+  }
+
+  async function selectRuleForEditing(id) {
+    if (!id || id === state.editingRuleId) return;
+    if (!(await flushRuleSave())) return;
+    openRuleEditor(id);
   }
 
   function openRuleEditor(id) {
     const rule = state.rules.find((item) => item.id === id);
     if (!rule) return;
+
+    clearTimeout(state.ruleSaveTimer);
+    state.ruleSaveTimer = null;
+    state.ruleSavePending = false;
     state.editingRuleId = id;
-    $('#ruleEnabled').checked = rule.enabled;
+    state.ruleFileLoadedPath = null;
+
+    $('#ruleDetailEmpty').hidden = true;
+    $('#ruleForm').hidden = false;
+    $('#ruleTarget').value = 'url';
+    $('#ruleHost').value = '';
     $('#ruleName').value = rule.name || '';
-    $('#ruleTarget').value = rule.target;
-    $('#rulePattern').value = rule.pattern;
-    $('#ruleHost').value = rule.host || '';
+    $('#ruleEnabled').checked = rule.enabled;
+    $('#rulePattern').value = ruleFullPattern(rule);
+    $('#ruleMethod').value = rule.method;
     $('#ruleMatchMode').value = rule.matchMode || 'wildcard';
     $('#ruleIncludeSubpaths').checked = Boolean(rule.includeSubpaths);
-    $('#ruleMethod').value = rule.method;
     $('#ruleStatus').value = String(rule.statusCode);
     $('#ruleDelay').value = String(rule.delayMs || 0);
     $('#ruleFile').value = rule.filePath || '';
     $('#ruleContentType').value = rule.contentType || '';
-    state.ruleFileLoadedPath = null;
+    $('#ruleFormError').hidden = true;
+
     if (rule.responseBody !== undefined) {
       $('#ruleFileContent').value = rule.responseBody;
       $('#ruleFileState').textContent = '';
@@ -729,20 +872,193 @@
       $('#ruleFileState').textContent = rule.filePath ? 'Loading legacy response file...' : '';
       if (rule.filePath) void loadRuleFileContent();
     }
-    $('#ruleFormTitle').textContent = 'Edit rule';
-    $('#ruleIdentity').textContent = rule.id + ' | order ' + rule.order + (rule.updatedAt ? ' | updated ' + new Date(rule.updatedAt).toLocaleString() : '');
-    $('#saveRule').textContent = 'Save changes';
-    $('#ruleFormError').hidden = true;
-    $('#ruleForm').hidden = false;
+
+    syncRuleEditorHeader(rule);
+    updateRuleMatchHint();
+    setRuleSaveState('saved', 'Saved');
     renderRules();
-    $('#rulePattern').focus();
+  }
+
+  function validateRuleEditor() {
+    const pattern = $('#rulePattern').value.trim();
+    const mode = $('#ruleMatchMode').value;
+    const statusCode = Number($('#ruleStatus').value || 200);
+    const delayMs = Number($('#ruleDelay').value || 0);
+
+    if (!pattern) return 'URL is required.';
+    if (mode === 'regex') {
+      try {
+        new RegExp(pattern);
+      } catch {
+        return 'Regex pattern is invalid.';
+      }
+    } else if (!/^https?:\/\/[^/\s]+/i.test(pattern)) {
+      return 'Use a full URL including http:// or https:// and the domain.';
+    }
+    if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 599) {
+      return 'HTTP status must be between 100 and 599.';
+    }
+    if (!Number.isInteger(delayMs) || delayMs < 0 || delayMs > 60000) {
+      return 'Delay must be between 0 and 60000 ms.';
+    }
+    return '';
+  }
+
+  function ruleEditorPayload() {
+    return {
+      enabled: $('#ruleEnabled').checked,
+      name: $('#ruleName').value.trim() || null,
+      target: 'url',
+      pattern: $('#rulePattern').value.trim(),
+      host: null,
+      matchMode: $('#ruleMatchMode').value,
+      includeSubpaths: $('#ruleMatchMode').value === 'regex' ? false : $('#ruleIncludeSubpaths').checked,
+      method: $('#ruleMethod').value || '*',
+      filePath: null,
+      responseBody: $('#ruleFileContent').value,
+      statusCode: Number($('#ruleStatus').value || 200),
+      contentType: $('#ruleContentType').value.trim() || null,
+      delayMs: Number($('#ruleDelay').value || 0),
+    };
+  }
+
+  function scheduleRuleSave(delay = 650) {
+    if (!state.editingRuleId) return;
+    clearTimeout(state.ruleSaveTimer);
+    state.ruleSaveTimer = setTimeout(() => {
+      state.ruleSaveTimer = null;
+      void saveEditingRule();
+    }, delay);
+    setRuleSaveState('saving', 'Saving…');
+  }
+
+  async function saveEditingRule() {
+    const editingId = state.editingRuleId;
+    if (!editingId) return;
+
+    clearTimeout(state.ruleSaveTimer);
+    state.ruleSaveTimer = null;
+
+    const validationError = validateRuleEditor();
+    const errorElement = $('#ruleFormError');
+    if (validationError) {
+      errorElement.textContent = validationError;
+      errorElement.hidden = false;
+      setRuleSaveState('error', 'Not saved');
+      updateRuleMatchHint();
+      return;
+    }
+    errorElement.hidden = true;
+
+    if (state.ruleSaveInFlight) {
+      state.ruleSavePending = true;
+      setRuleSaveState('saving', 'Saving…');
+      return;
+    }
+
+    state.ruleSaveInFlight = true;
+    setRuleSaveState('saving', 'Saving…');
+    try {
+      const saved = await api('/api/rules/' + encodeURIComponent(editingId), {
+        method: 'PATCH',
+        body: JSON.stringify(ruleEditorPayload()),
+      });
+      state.rules = state.rules.map((rule) => rule.id === editingId ? saved : rule);
+      if (state.editingRuleId === editingId) {
+        syncRuleEditorHeader(saved);
+        $('#ruleEnabled').checked = saved.enabled;
+        $('#ruleEnabledText').textContent = saved.enabled ? 'Enabled' : 'Disabled';
+        setRuleSaveState('saved', 'Saved automatically');
+      }
+      renderRules();
+    } catch (error) {
+      if (state.editingRuleId === editingId) {
+        errorElement.textContent = error.message;
+        errorElement.hidden = false;
+        setRuleSaveState('error', 'Save failed');
+      }
+    } finally {
+      state.ruleSaveInFlight = false;
+      if (state.ruleSavePending && state.editingRuleId === editingId) {
+        state.ruleSavePending = false;
+        scheduleRuleSave(0);
+      }
+    }
+  }
+
+  async function createRule() {
+    if (!(await flushRuleSave())) return;
+    try {
+      const created = await api('/api/rules', {
+        method: 'POST',
+        body: JSON.stringify({
+          enabled: true,
+          name: 'New rule',
+          target: 'url',
+          pattern: 'https://example.com/*',
+          matchMode: 'wildcard',
+          includeSubpaths: false,
+          method: 'GET',
+          responseBody: '{\n  "ok": true\n}',
+          statusCode: 200,
+          contentType: 'application/json; charset=utf-8',
+          delayMs: 0,
+        }),
+      });
+      if (!state.rules.some((rule) => rule.id === created.id)) {
+        state.rules = [...state.rules, created].sort((a, b) => a.order - b.order);
+      }
+      openRuleEditor(created.id);
+      $('#rulePattern').focus();
+      $('#rulePattern').select();
+      toast('Rule created · changes save automatically');
+    } catch (error) {
+      toast('Could not create rule: ' + error.message);
+    }
+  }
+
+  async function duplicateEditingRule() {
+    if (!(await flushRuleSave())) return;
+    const rule = state.rules.find((item) => item.id === state.editingRuleId);
+    if (!rule) return;
+    try {
+      const payload = {
+        enabled: false,
+        name: (rule.name || 'Map Local rule') + ' copy',
+        target: 'url',
+        pattern: ruleFullPattern(rule),
+        matchMode: rule.matchMode || 'wildcard',
+        includeSubpaths: Boolean(rule.includeSubpaths),
+        method: rule.method,
+        statusCode: rule.statusCode,
+        contentType: rule.contentType,
+        delayMs: rule.delayMs || 0,
+        ...(rule.responseBody !== undefined ? { responseBody: rule.responseBody } : { filePath: rule.filePath }),
+      };
+      const created = await api('/api/rules', { method: 'POST', body: JSON.stringify(payload) });
+      state.rules = [...state.rules, created].sort((a, b) => a.order - b.order);
+      openRuleEditor(created.id);
+      toast('Rule duplicated and disabled');
+    } catch (error) {
+      toast('Could not duplicate rule: ' + error.message);
+    }
   }
 
   async function toggleRule(id) {
     const rule = state.rules.find((item) => item.id === id);
     if (!rule) return;
     try {
-      await api('/api/rules/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ enabled: !rule.enabled }) });
+      const saved = await api('/api/rules/' + encodeURIComponent(id), {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: !rule.enabled }),
+      });
+      state.rules = state.rules.map((item) => item.id === id ? saved : item);
+      if (state.editingRuleId === id) {
+        $('#ruleEnabled').checked = saved.enabled;
+        syncRuleEditorHeader(saved);
+        setRuleSaveState('saved', 'Saved automatically');
+      }
+      renderRules();
     } catch (error) {
       toast('Could not update rule: ' + error.message);
     }
@@ -751,6 +1067,15 @@
   async function deleteRule(id) {
     try {
       await api('/api/rules/' + encodeURIComponent(id), { method: 'DELETE' });
+      state.rules = state.rules.filter((rule) => rule.id !== id);
+      if (state.editingRuleId === id) {
+        const next = state.rules[0];
+        if (next) openRuleEditor(next.id);
+        else resetRuleEditor();
+      } else {
+        renderRules();
+      }
+      toast('Rule deleted');
     } catch (error) {
       toast('Could not delete rule: ' + error.message);
     }
@@ -856,6 +1181,9 @@
     } else if (type === 'rules-changed') {
       state.rules = payload.rules || [];
       if (state.status) state.status.rules = state.rules.length;
+      if (state.editingRuleId && !state.rules.some((rule) => rule.id === state.editingRuleId)) {
+        resetRuleEditor();
+      }
       renderRules();
       renderStatus();
     }
@@ -1009,54 +1337,58 @@
 
     $('#copyCurl').addEventListener('click', () => state.selected && copyText(curlFor(state.selected)));
 
-    $('#openRuleForm').addEventListener('click', () => {
-      resetRuleEditor();
-      $('#ruleForm').hidden = false;
-      $('#rulePattern').focus();
+    $('#openRuleForm').addEventListener('click', () => void createRule());
+    $('#ruleSearch').addEventListener('input', renderRules);
+    $('#ruleMethodFilter').addEventListener('change', renderRules);
+    $('#ruleSort').addEventListener('change', renderRules);
+
+    const editorInputSelectors = [
+      '#ruleName',
+      '#rulePattern',
+      '#ruleStatus',
+      '#ruleContentType',
+      '#ruleDelay',
+      '#ruleFileContent',
+    ];
+    for (const selector of editorInputSelectors) {
+      $(selector).addEventListener('input', () => {
+        if (selector === '#rulePattern') {
+          $('#ruleDetailTitle').textContent = $('#rulePattern').value || 'Map Local rule';
+          updateRuleMatchHint();
+        }
+        scheduleRuleSave();
+      });
+    }
+
+    for (const selector of ['#ruleMethod', '#ruleMatchMode', '#ruleIncludeSubpaths', '#ruleEnabled']) {
+      $(selector).addEventListener('change', () => {
+        if (selector === '#ruleMethod') {
+          const badge = $('#ruleMethodBadge');
+          badge.textContent = $('#ruleMethod').value;
+          badge.className = 'method-badge' + methodBadgeClass($('#ruleMethod').value);
+        }
+        if (selector === '#ruleMatchMode') updateRuleMatchHint();
+        if (selector === '#ruleEnabled') {
+          $('#ruleEnabledText').textContent = $('#ruleEnabled').checked ? 'Enabled' : 'Disabled';
+        }
+        scheduleRuleSave(selector === '#ruleEnabled' ? 0 : 250);
+      });
+    }
+
+    $('#duplicateRule').addEventListener('click', () => void duplicateEditingRule());
+    $('#deleteEditingRule').addEventListener('click', () => {
+      if (state.editingRuleId) void deleteRule(state.editingRuleId);
     });
-    $('#cancelRule').addEventListener('click', () => {
-      resetRuleEditor();
-      $('#ruleForm').hidden = true;
+    $('#ruleForm').addEventListener('submit', (event) => {
+      event.preventDefault();
+      void saveEditingRule();
     });
 
-    $('#ruleForm').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const errorElement = $('#ruleFormError');
-      errorElement.hidden = true;
-      try {
-        const editingId = state.editingRuleId;
-        const payload = {
-          enabled: $('#ruleEnabled').checked,
-          name: $('#ruleName').value || (editingId ? null : undefined),
-          target: $('#ruleTarget').value,
-          pattern: $('#rulePattern').value,
-          host: $('#ruleHost').value || (editingId ? null : undefined),
-          matchMode: $('#ruleMatchMode').value,
-          includeSubpaths: $('#ruleIncludeSubpaths').checked,
-          method: $('#ruleMethod').value || '*',
-          filePath: editingId ? null : undefined,
-          responseBody: $('#ruleFileContent').value,
-          statusCode: Number($('#ruleStatus').value || 200),
-          contentType: $('#ruleContentType').value || (editingId ? null : undefined),
-          delayMs: Number($('#ruleDelay').value || 0),
-        };
-        const saved = await api(editingId ? '/api/rules/' + encodeURIComponent(editingId) : '/api/rules', {
-          method: editingId ? 'PATCH' : 'POST',
-          body: JSON.stringify(payload),
-        });
-        if (editingId) {
-          state.rules = state.rules.map((rule) => rule.id === editingId ? saved : rule);
-        } else if (saved && !state.rules.some((rule) => rule.id === saved.id)) {
-          state.rules = [...state.rules, saved].sort((a, b) => a.order - b.order);
-        }
-        const message = editingId ? 'Rule updated' : 'Rule added';
-        resetRuleEditor();
-        $('#ruleForm').hidden = true;
-        renderRules();
-        toast(message);
-      } catch (error) {
-        errorElement.textContent = error.message;
-        errorElement.hidden = false;
+    document.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' &&
+          $('#mapTab').classList.contains('active') && state.editingRuleId) {
+        event.preventDefault();
+        void saveEditingRule();
       }
     });
 

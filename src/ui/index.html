@@ -13,7 +13,6 @@
         <div class="brand-mark">TL</div>
         <div>
           <strong>Trace Local</strong>
-          <span id="proxySummary">Starting proxy…</span>
         </div>
       </div>
       <div id="proxyListening" class="listening-banner"><span class="dot"></span><span id="proxyListeningText">Starting proxy...</span></div>
@@ -103,68 +102,137 @@
         </div>
       </section>
 
-      <section id="mapTab" class="tab-panel">
-        <div class="page-heading">
-          <div>
-            <p class="eyebrow">Response overrides</p>
-            <h1>Map Local</h1>
-            <p>Override matching responses directly, like Proxyman Map Local.</p>
-          </div>
-          <button id="openRuleForm" class="button primary">New rule</button>
-        </div>
+      <section id="mapTab" class="tab-panel map-local-panel">
+        <div class="map-local-workspace">
+          <aside class="map-rules-pane">
+            <div class="map-rules-heading">
+              <div>
+                <p class="eyebrow">Response overrides</p>
+                <h1>Map Local</h1>
+              </div>
+              <button id="openRuleForm" class="button primary">+ New rule</button>
+            </div>
+            <div class="map-rules-toolbar">
+              <input id="ruleSearch" type="search" placeholder="Search rules…" aria-label="Search Map Local rules">
+              <select id="ruleMethodFilter" aria-label="Filter rules by method">
+                <option value="">All methods</option>
+                <option>GET</option><option>POST</option><option>PUT</option>
+                <option>PATCH</option><option>DELETE</option><option>OPTIONS</option>
+              </select>
+              <select id="ruleSort" aria-label="Sort Map Local rules">
+                <option value="order">Default order</option>
+                <option value="url-asc">URL A-Z</option>
+                <option value="url-desc">URL Z-A</option>
+              </select>
+            </div>
+            <div id="ruleList" class="rule-list map-rule-list"></div>
+            <div id="rulesEmpty" class="empty-state map-rules-empty">
+              <div class="empty-icon">⇄</div>
+              <h2>No Map Local rules</h2>
+              <p>Create a rule to override a matching response inline.</p>
+            </div>
+          </aside>
 
-        <form id="ruleForm" class="rule-form map-local-editor" hidden>
-          <div class="rule-editor-heading"><strong id="ruleFormTitle">New rule</strong><span id="ruleIdentity" class="cell-muted"></span></div>
-          <div class="map-editor-options">
-            <label>Name
-              <input id="ruleName" placeholder="Untitled">
-            </label>
-            <label class="checkbox-label"><input id="ruleEnabled" type="checkbox" checked> Enabled</label>
-          </div>
-          <div class="form-grid">
-            <label>Match
-              <select id="ruleTarget"><option value="url">Full URL</option><option value="host">Host</option><option value="path">Path</option></select>
-            </label>
-            <label>URL / Path
-              <input id="rulePattern" required placeholder="/v1/jobs/*">
-            </label>
-            <label>Method
-              <select id="ruleMethod"><option value="*">ANY</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>OPTIONS</option></select>
-            </label>
-            <label>Status
-              <input id="ruleStatus" type="number" min="100" max="599" value="200">
-            </label>
-          </div>
-          <div class="map-editor-options map-editor-options-secondary">
-            <label>Match mode
-              <select id="ruleMatchMode"><option value="wildcard">Use Wildcard</option><option value="exact">Exact URL</option></select>
-            </label>
-            <label class="checkbox-label"><input id="ruleIncludeSubpaths" type="checkbox"> Include all subpaths of this URL</label>
-            <label>Delay response
-              <div class="delay-row"><input id="ruleDelay" type="number" min="0" max="60000" value="0"><span>ms</span></div>
-            </label>
-          </div>
-          <div class="map-to-heading">Response</div>
-          <input id="ruleHost" type="hidden">
-          <input id="ruleFile" type="hidden">
-          <label>Content-Type <span class="optional">optional</span>
-            <input id="ruleContentType" placeholder="application/json">
-          </label>
-          <label>Response body
-            <textarea id="ruleFileContent" class="response-editor" spellcheck="false" placeholder="Edit the mapped response directly here."></textarea>
-          </label>
-          <span id="ruleFileState" class="cell-muted" hidden></span>
-          <div class="form-actions">            <button id="cancelRule" type="button" class="button ghost">Cancel</button>
-            <button id="saveRule" type="submit" class="button primary">Add rule</button>
-          </div>
-          <p id="ruleFormError" class="form-error" hidden></p>
-        </form>
+          <section class="map-detail-pane">
+            <div id="ruleDetailEmpty" class="map-detail-empty">
+              <div>
+                <div class="empty-icon">⇄</div>
+                <h2>Select a Map Local rule</h2>
+                <p>Choose a rule from the list or create a new one.</p>
+              </div>
+            </div>
 
-        <div id="ruleList" class="rule-list"></div>
-        <div id="rulesEmpty" class="empty-state page-empty">
-          <div class="empty-icon">⇄</div>
-          <h2>No Map Local rules</h2>
-          <p>Create a rule to override a matching response inline.</p>
+            <form id="ruleForm" class="rule-form map-local-editor map-detail-editor" hidden>
+              <div class="map-detail-header">
+                <div class="map-detail-title">
+                  <span id="ruleMethodBadge" class="method-badge">GET</span>
+                  <div>
+                    <strong id="ruleDetailTitle">Map Local rule</strong>
+                    <span id="ruleIdentity" class="cell-muted"></span>
+                  </div>
+                </div>
+                <div class="map-detail-actions">
+                  <label class="switch-field">
+                    <input id="ruleEnabled" type="checkbox" checked>
+                    <span class="switch-track" aria-hidden="true"></span>
+                    <span id="ruleEnabledText">Enabled</span>
+                  </label>
+                  <button id="duplicateRule" type="button" class="button ghost compact">Duplicate</button>
+                  <button id="deleteEditingRule" type="button" class="button ghost compact danger">Delete</button>
+                </div>
+              </div>
+
+              <div class="map-detail-tabs">
+                <span class="map-detail-tab active">Rule</span>
+              </div>
+
+              <div class="map-detail-scroll">
+                <section class="map-detail-section">
+                  <div class="map-section-heading">
+                    <div>
+                      <h2>Request Matching</h2>
+                      <p>Match the full request URL, including its domain.</p>
+                    </div>
+                  </div>
+
+                  <label>Name <span class="optional">optional</span>
+                    <input id="ruleName" placeholder="Untitled rule">
+                  </label>
+
+                  <div class="map-match-grid">
+                    <label>Method
+                      <select id="ruleMethod"><option value="*">ANY</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>OPTIONS</option></select>
+                    </label>
+                    <label>URL
+                      <input id="rulePattern" required placeholder="Full URL including domain" autocomplete="off">
+                    </label>
+                    <label>Match
+                      <select id="ruleMatchMode">
+                        <option value="exact">Exact URL</option>
+                        <option value="wildcard">Wildcard</option>
+                        <option value="regex">Regex</option>
+                      </select>
+                    </label>
+                  </div>
+                  <p id="ruleMatchHint" class="map-match-hint">Matches this full URL exactly.</p>
+                  <label class="checkbox-label map-subpath-option"><input id="ruleIncludeSubpaths" type="checkbox"> Include all subpaths of this URL</label>
+                </section>
+
+                <section class="map-detail-section">
+                  <div class="map-section-heading">
+                    <div>
+                      <h2>Response</h2>
+                      <p>Return this response when the request matches.</p>
+                    </div>
+                    <span id="ruleSaveState" class="rule-save-state saved"><span class="dot"></span><span>Saved</span><kbd>Ctrl+S</kbd></span>
+                  </div>
+
+                  <div class="map-response-grid">
+                    <label>HTTP Status
+                      <input id="ruleStatus" type="number" min="100" max="599" value="200">
+                    </label>
+                    <label>Content-Type <span class="optional">optional</span>
+                      <input id="ruleContentType" placeholder="application/json; charset=utf-8">
+                    </label>
+                    <label>Delay
+                      <div class="delay-row"><input id="ruleDelay" type="number" min="0" max="60000" value="0"><span>ms</span></div>
+                    </label>
+                  </div>
+
+                  <label>Response body
+                    <textarea id="ruleFileContent" class="response-editor map-response-editor" spellcheck="false" placeholder="Edit the mapped response directly here."></textarea>
+                  </label>
+                  <span id="ruleFileState" class="cell-muted" hidden></span>
+                </section>
+
+                <input id="ruleTarget" type="hidden" value="url">
+                <input id="ruleHost" type="hidden">
+                <input id="ruleFile" type="hidden">
+                <strong id="ruleFormTitle" hidden>Edit rule</strong>
+                <p id="ruleFormError" class="form-error" hidden></p>
+              </div>
+            </form>
+          </section>
         </div>
       </section>
 

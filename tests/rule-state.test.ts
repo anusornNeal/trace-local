@@ -113,6 +113,34 @@ test('RuleStateRepository recovery does not mask filesystem failures', async () 
 });
 
 
+test('RuleStateRepository accepts valid regex rules and rejects invalid regex patterns', async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-state-regex-'));
+  const repository = new RuleStateRepository(dataDir);
+  const regexRule: MapRule = {
+    id: 'regex-one',
+    order: 1,
+    enabled: true,
+    target: 'url',
+    pattern: '^https://api\\.example\\.test/v[0-9]+/users$',
+    matchMode: 'regex',
+    method: 'GET',
+    responseBody: '{}',
+    statusCode: 200,
+    createdAt: '2026-10-07T00:00:00.000Z',
+    updatedAt: '2026-10-07T00:00:00.000Z',
+  };
+
+  try {
+    await repository.save([regexRule]);
+    assert.deepEqual(await repository.load(), [{ ...regexRule, contentType: undefined }]);
+
+    const invalid = { ...regexRule, id: 'regex-bad', pattern: '[invalid' };
+    await assert.rejects(repository.save([invalid]), /valid regular expression/i);
+  } finally {
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('RuleStateRepository round-trips inline response rules without file paths', async () => {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-state-inline-'));
   const repository = new RuleStateRepository(dataDir);

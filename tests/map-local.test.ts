@@ -103,6 +103,45 @@ test('MapRuleStore keeps stable order and matches target/method globs', () => {
   );
 });
 
+test('MapRuleStore supports regex URL matching and rejects invalid regex patterns', () => {
+  const store = new MapRuleStore();
+  const rule = store.create({
+    target: 'url',
+    pattern: '^https://api\\.example\\.test/v[0-9]+/users/[0-9]+$',
+    matchMode: 'regex',
+    method: 'GET',
+    responseBody: '{"ok":true}',
+  });
+
+  assert.equal(
+    store.findMatch({
+      method: 'GET',
+      url: 'https://api.example.test/v3/users/42',
+      host: 'api.example.test',
+      path: '/v3/users/42',
+    })?.id,
+    rule.id,
+  );
+  assert.equal(
+    store.findMatch({
+      method: 'GET',
+      url: 'https://api.example.test/v3/projects/42',
+      host: 'api.example.test',
+      path: '/v3/projects/42',
+    }),
+    undefined,
+  );
+  assert.throws(
+    () => store.create({
+      target: 'url',
+      pattern: '[invalid',
+      matchMode: 'regex',
+      responseBody: '{}',
+    }),
+    /valid regular expression/i,
+  );
+});
+
 test('Map Local serves live file content, bypasses upstream, and captures mapped errors', async () => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'tracelocal-map-'));
   const mappedPath = path.join(tempDir, 'response.json');

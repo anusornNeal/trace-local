@@ -50,9 +50,11 @@ export function matchesMapRule(rule: MapRule, request: MatchableRequest): boolea
   let matched =
     rule.matchMode === 'exact'
       ? normalizedCandidate === normalizedPattern
-      : globToRegExp(rule.pattern, caseInsensitive).test(candidate);
+      : rule.matchMode === 'regex'
+        ? new RegExp(rule.pattern, caseInsensitive ? 'i' : undefined).test(candidate)
+        : globToRegExp(rule.pattern, caseInsensitive).test(candidate);
 
-  if (!matched && rule.includeSubpaths) {
+  if (!matched && rule.includeSubpaths && rule.matchMode !== 'regex') {
     const base = normalizedPattern.replace(/[\/*]+$/, '');
     matched = normalizedCandidate === base || normalizedCandidate.startsWith(base + '/');
   }

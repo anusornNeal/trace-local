@@ -40,8 +40,8 @@ function normalizeTarget(target: MapTarget | undefined): MapTarget {
 
 function normalizeMatchMode(mode: MapRule['matchMode']): MapRule['matchMode'] {
   if (mode === undefined) return undefined;
-  if (mode !== 'wildcard' && mode !== 'exact') {
-    throw new Error('matchMode must be wildcard or exact');
+  if (mode !== 'wildcard' && mode !== 'exact' && mode !== 'regex') {
+    throw new Error('matchMode must be wildcard, exact, or regex');
   }
   return mode;
 }
@@ -50,6 +50,17 @@ function normalizePattern(pattern: string | undefined): string {
   const value = pattern?.trim();
   if (!value) throw new Error('pattern must not be empty');
   return value;
+}
+
+function validatePatternForMode(pattern: string, mode: MapRule['matchMode']): string {
+  if (mode === 'regex') {
+    try {
+      new RegExp(pattern);
+    } catch {
+      throw new Error('pattern must be a valid regular expression when matchMode is regex');
+    }
+  }
+  return pattern;
 }
 
 function normalizeHost(host: string | null | undefined): string | undefined {
@@ -103,15 +114,17 @@ export class MapRuleStore {
     const filePath = normalizeFilePath(input.filePath);
     const responseBody = normalizeResponseBody(input.responseBody);
     assertResponseSource(filePath, responseBody);
+    const matchMode = normalizeMatchMode(input.matchMode);
+    const pattern = validatePatternForMode(normalizePattern(input.pattern), matchMode);
     const rule: MapRule = {
       id: randomUUID(),
       order: this.nextOrder++,
       enabled: input.enabled ?? true,
       ...(input.name?.trim() ? { name: input.name.trim() } : {}),
       target: normalizeTarget(input.target),
-      pattern: normalizePattern(input.pattern),
+      pattern,
       ...(normalizeHost(input.host) ? { host: normalizeHost(input.host) } : {}),
-      ...(normalizeMatchMode(input.matchMode) ? { matchMode: normalizeMatchMode(input.matchMode) } : {}),
+      ...(matchMode ? { matchMode } : {}),
       ...(input.includeSubpaths !== undefined ? { includeSubpaths: input.includeSubpaths } : {}),
       method: normalizeMethod(input.method),
       ...(filePath !== undefined ? { filePath } : {}),
@@ -134,14 +147,19 @@ export class MapRuleStore {
     const filePath = input.filePath === undefined ? current.filePath : normalizeFilePath(input.filePath);
     const responseBody = input.responseBody === undefined ? current.responseBody : normalizeResponseBody(input.responseBody);
     assertResponseSource(filePath, responseBody);
+    const matchMode = input.matchMode === undefined ? current.matchMode : normalizeMatchMode(input.matchMode);
+    const pattern = validatePatternForMode(
+      input.pattern === undefined ? current.pattern : normalizePattern(input.pattern),
+      matchMode,
+    );
     const next: MapRule = {
       ...current,
       enabled: input.enabled ?? current.enabled,
       name: input.name === undefined ? current.name : input.name?.trim() || undefined,
       target: input.target === undefined ? current.target : normalizeTarget(input.target),
-      pattern: input.pattern === undefined ? current.pattern : normalizePattern(input.pattern),
+      pattern,
       host: input.host === undefined ? current.host : normalizeHost(input.host),
-      matchMode: input.matchMode === undefined ? current.matchMode : normalizeMatchMode(input.matchMode),
+      matchMode,
       includeSubpaths: input.includeSubpaths === undefined ? current.includeSubpaths : input.includeSubpaths,
       method: input.method === undefined ? current.method : normalizeMethod(input.method),
       filePath,

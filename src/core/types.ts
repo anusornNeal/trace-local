@@ -8,7 +8,7 @@ export interface MapRule {
   target: MapTarget;
   pattern: string;
   host?: string;
-  matchMode?: 'wildcard' | 'exact';
+  matchMode?: 'wildcard' | 'exact' | 'regex';
   includeSubpaths?: boolean;
   method: string;
   filePath?: string;
@@ -26,7 +26,7 @@ export interface CreateMapRuleInput {
   target?: MapTarget;
   pattern: string;
   host?: string;
-  matchMode?: 'wildcard' | 'exact';
+  matchMode?: 'wildcard' | 'exact' | 'regex';
   includeSubpaths?: boolean;
   method?: string;
   filePath?: string;
@@ -42,7 +42,7 @@ export interface UpdateMapRuleInput {
   target?: MapTarget;
   pattern?: string;
   host?: string | null;
-  matchMode?: 'wildcard' | 'exact';
+  matchMode?: 'wildcard' | 'exact' | 'regex';
   includeSubpaths?: boolean;
   method?: string;
   filePath?: string | null;
