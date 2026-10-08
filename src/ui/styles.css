@@ -728,7 +728,7 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
   background: var(--panel);
 }
 .map-rule-list .rule-row {
-  grid-template-columns: 48px minmax(0,1fr) 36px 32px;
+  grid-template-columns: 48px minmax(0,1fr) 36px;
   min-height: 62px;
   padding: 8px 10px;
   gap: 9px;
@@ -766,17 +766,6 @@ pre.json-body, pre.body-viewer.json-body { white-space: pre; overflow-wrap: norm
 .method-badge.put,
 .method-badge.patch { background: rgba(192,132,252,.14); color: #d7b7ff; }
 .method-badge.delete { background: rgba(255,107,118,.12); color: #ff9ba3; }
-.rule-more {
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-.rule-more:hover { background: var(--panel-3); color: var(--text); }
-
 .map-detail-pane {
   min-width: 0;
   min-height: 0;
@@ -1093,8 +1082,7 @@ input, select, button, textarea { font-family: inherit; }
 .map-rule-list .rule-row {
   align-items: center;
 }
-.map-rule-list .switch,
-.map-rule-list .rule-more {
+.map-rule-list .switch {
   align-self: center;
   justify-self: center;
   margin: 0;
@@ -1115,3 +1103,5 @@ input, select, button, textarea { font-family: inherit; }
   height: 16px !important;
   margin: 0 !important;
 }
+
+.map-rule-list .rule-more { display: none; }
