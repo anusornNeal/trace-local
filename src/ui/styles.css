@@ -1088,3 +1088,30 @@ input, select, button, textarea { font-family: inherit; }
 .map-match-grid, .map-response-grid { align-items: end; }
 .map-subpath-option { margin-top: 2px !important; padding: 2px 0 1px; }
 .rule-save-state { margin-top: 1px; }
+
+/* Map Local alignment corrections */
+.map-rule-list .rule-row {
+  align-items: center;
+}
+.map-rule-list .switch,
+.map-rule-list .rule-more {
+  align-self: center;
+  justify-self: center;
+  margin: 0;
+}
+.map-detail-editor .map-subpath-option {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1.35;
+}
+.map-detail-editor .map-subpath-option input {
+  flex: 0 0 auto;
+  align-self: center !important;
+  width: 16px !important;
+  height: 16px !important;
+  margin: 0 !important;
+}
