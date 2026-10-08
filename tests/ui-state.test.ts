@@ -45,7 +45,7 @@ function inspector() {
     },
   });
   // Expose closure functions only in this VM; the production renderer has no testing API.
-  const script = readFileSync('src/ui/app.js', 'utf8').replace(/\}\)\(\);\s*$/, 'globalThis.inspector = { state, loadBootstrap, curlFor, bodyText, isJsonBody }; })();');
+  const script = readFileSync('src/ui/app.js', 'utf8').replace(/\}\)\(\);\s*$/, 'globalThis.inspector = { state, loadBootstrap, curlFor, bodyText, isJsonBody, noiseSessionIds }; })();');
   vm.runInContext(script, context);
   return {
     context, elements, events: Events.current,
@@ -103,6 +103,37 @@ test('an older bootstrap response cannot overwrite a newer reconnect snapshot', 
   ui.release();
   await Promise.all([oldRefresh, newRefresh]);
   assert.equal(ui.context.inspector.state.sessions[0].id, 'latest');
+});
+
+test('noise detection is heuristic and host-agnostic', async () => {
+  const ui = inspector();
+  await tick();
+  const repeated = Array.from({ length: 3 }, (_, index) => ({
+    ...session('noise-' + index),
+    host: 'background.example.test',
+    path: '/health-check',
+    url: 'https://background.example.test/health-check',
+    statusCode: 204,
+    requestBodyBytes: 0,
+    responseBodyBytes: 0,
+    mapped: false,
+  }));
+  const useful = {
+    ...session('useful'),
+    host: 'background.example.test',
+    path: '/health-check',
+    url: 'https://background.example.test/health-check',
+    statusCode: 200,
+    requestBodyBytes: 0,
+    responseBodyBytes: 128,
+    mapped: false,
+  };
+  ui.context.inspector.state.sessions = [...repeated, useful];
+
+  assert.deepEqual(
+    Array.from(ui.context.inspector.noiseSessionIds()).sort(),
+    repeated.map((entry) => entry.id).sort(),
+  );
 });
 
 test('copy cURL quotes untrusted HTTP method tokens as well as headers and URL', async () => {

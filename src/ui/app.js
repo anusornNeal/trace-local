@@ -24,6 +24,7 @@
     ruleSavePending: false,
     pendingBootstrap: null,
     trafficSort: { key: 'startedAt', direction: 'desc' },
+    hideNoise: true,
     paneWidths: { domains: 190, detail: 520 },
     columnWidths: { method: 58, status: 58, target: 260, duration: 66, request: 68, response: 68 },
   };
@@ -41,6 +42,7 @@
       if (saved.layoutVersion === 2) state.paneWidths = { ...state.paneWidths, ...(saved.paneWidths || {}) };
       state.columnWidths = { ...state.columnWidths, ...(saved.columnWidths || {}) };
       state.favoriteDomains = new Set(Array.isArray(saved.favoriteDomains) ? saved.favoriteDomains : []);
+      if (typeof saved.hideNoise === 'boolean') state.hideNoise = saved.hideNoise;
     } catch {}
   }
 
@@ -52,6 +54,7 @@
         paneWidths: state.paneWidths,
         columnWidths: state.columnWidths,
         favoriteDomains: [...state.favoriteDomains],
+        hideNoise: state.hideNoise,
       }));
     } catch {}
   }
@@ -136,7 +139,7 @@
     if (sessionCountElement) sessionCountElement.textContent = s.sessions + (s.sessions === 1 ? ' request' : ' requests');
     $('#runtimeVersion').textContent = s.version || '\u2014';
     $('#controlUrl').textContent = location.origin;
-    $('#trafficCount').textContent = String(state.sessions.length);
+    $('#trafficCount').textContent = String(visibleTraffic().sessions.length);
     $('#ruleCount').textContent = String(state.rules.length);
     $('#domainSummary').textContent = 'Domains ' + new Set(state.sessions.map((item) => item.host).filter(Boolean)).size;
     for (const warning of s.warnings || []) {
@@ -154,6 +157,50 @@
     const sseStatus = $('#sseStatus');
     sseStatus.textContent = state.connected ? 'Connected' : 'Reconnecting';
     sseStatus.classList.toggle('connected', state.connected);
+  }
+
+  function noiseSessionIds() {
+    const counts = new Map();
+    const candidates = [];
+
+    for (const session of state.sessions) {
+      const method = String(session.method || '').toUpperCase();
+      const isEmptyBackgroundRequest =
+        !session.mapped &&
+        !session.error &&
+        (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') &&
+        session.statusCode === 204 &&
+        Number(session.requestBodyBytes || 0) === 0 &&
+        Number(session.responseBodyBytes || 0) === 0;
+
+      if (!isEmptyBackgroundRequest) continue;
+      const key = [method, session.host || '', session.path || ''].join('\n');
+      candidates.push([session.id, key, session.host]);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+
+    return new Set(
+      candidates
+        .filter(([, key, host]) => (counts.get(key) || 0) >= 3 && !state.favoriteDomains.has(host))
+        .map(([id]) => id)
+    );
+  }
+
+  function visibleTraffic() {
+    const noiseIds = noiseSessionIds();
+    const sessions = state.hideNoise
+      ? state.sessions.filter((session) => !noiseIds.has(session.id))
+      : state.sessions;
+    return { sessions, noiseCount: noiseIds.size };
+  }
+
+  function renderNoiseFilter(noiseCount) {
+    const button = $('#noiseFilter');
+    if (!button) return;
+    button.setAttribute?.('aria-pressed', String(state.hideNoise));
+    button.textContent = state.hideNoise
+      ? ('Noise ' + noiseCount + ' hidden')
+      : ('Hide noise' + (noiseCount ? ' (' + noiseCount + ')' : ''));
   }
 
   function sessionMatches(session) {
@@ -174,7 +221,8 @@
     const domainCount = $('#domainCount');
     if (!domainList || !domainCount) return;
     const domains = new Map();
-    for (const session of state.sessions) {
+    const visibleSessions = visibleTraffic().sessions;
+    for (const session of visibleSessions) {
       if (!session.host) continue;
       domains.set(session.host, (domains.get(session.host) || 0) + 1);
     }
@@ -190,7 +238,7 @@
     domainCount.textContent = String(activeDomainCount);
     $('#domainSummary').textContent = 'Domains ' + activeDomainCount;
     domainList.innerHTML =
-      '<button class="domain-row domain-all ' + (!state.domainFilter ? 'selected' : '') + '" data-domain="">All <span>' + state.sessions.length + '</span></button>' +
+      '<button class="domain-row domain-all ' + (!state.domainFilter ? 'selected' : '') + '" data-domain="">All <span>' + visibleSessions.length + '</span></button>' +
       entries.map(([host, count]) => {
         const favorite = state.favoriteDomains.has(host);
         return '<div class="domain-row-shell ' + (state.domainFilter === host ? 'selected ' : '') + (favorite ? 'favorite' : '') + '">' +
@@ -234,8 +282,10 @@
 
   function renderSessions() {
     const list = $('#sessionList');
-    const sessions = state.sessions.filter(sessionMatches);
-    $('#trafficCount').textContent = String(state.sessions.length);
+    const visibility = visibleTraffic();
+    const sessions = visibility.sessions.filter(sessionMatches);
+    $('#trafficCount').textContent = String(visibility.sessions.length);
+    renderNoiseFilter(visibility.noiseCount);
     $('#trafficEmpty').classList.toggle('visible', sessions.length === 0);
     renderDomains();
 
@@ -713,7 +763,6 @@
         '<span class="method-badge' + methodBadgeClass(rule.method) + '">' + escapeHtml(rule.method) + '</span>' +
         '<span class="rule-main"><strong>' + escapeHtml(displayPath) + '</strong><span>' + escapeHtml(detail) + '</span></span>' +
         '<button class="switch ' + (rule.enabled ? 'on' : '') + '" data-toggle type="button" role="switch" aria-checked="' + String(rule.enabled) + '" aria-label="' + (rule.enabled ? 'Disable' : 'Enable') + ' rule"></button>' +
-        '<span class="rule-more" aria-hidden="true">⋮</span>' +
       '</div>';
     }).join('');
 
@@ -1383,6 +1432,12 @@
       $$('.detail-section').forEach((section) => section.classList.remove('active'));
       $('#detail' + tab.dataset.detail[0].toUpperCase() + tab.dataset.detail.slice(1)).classList.add('active');
     }));
+
+    $('#noiseFilter').addEventListener('click', () => {
+      state.hideNoise = !state.hideNoise;
+      saveUiPrefs();
+      renderSessions();
+    });
 
     ['#trafficSearch', '#methodFilter', '#statusFilter'].forEach((selector) => {
       $(selector).addEventListener('input', renderSessions);
