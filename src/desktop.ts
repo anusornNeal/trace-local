@@ -113,6 +113,7 @@ async function createMainWindow(): Promise<void> {
     minWidth: 1080,
     minHeight: 680,
     show: false,
+    autoHideMenuBar: true,
     backgroundColor: '#0b0f14',
     title: 'Trace Local',
     webPreferences: {
@@ -123,6 +124,8 @@ async function createMainWindow(): Promise<void> {
       webSecurity: true,
     },
   });
+
+  mainWindow.setMenuBarVisibility(false);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {

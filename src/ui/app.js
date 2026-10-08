@@ -24,7 +24,7 @@
     ruleSavePending: false,
     pendingBootstrap: null,
     trafficSort: { key: 'startedAt', direction: 'desc' },
-    paneWidths: { domains: 190, detail: 390 },
+    paneWidths: { domains: 190, detail: 520 },
     columnWidths: { method: 58, status: 58, target: 260, duration: 66, request: 68, response: 68 },
   };
 
@@ -38,7 +38,7 @@
     try {
       if (typeof localStorage === 'undefined') return;
       const saved = JSON.parse(localStorage.getItem('tracelocal.inspector.layout') || '{}');
-      state.paneWidths = { ...state.paneWidths, ...(saved.paneWidths || {}) };
+      if (saved.layoutVersion === 2) state.paneWidths = { ...state.paneWidths, ...(saved.paneWidths || {}) };
       state.columnWidths = { ...state.columnWidths, ...(saved.columnWidths || {}) };
       state.favoriteDomains = new Set(Array.isArray(saved.favoriteDomains) ? saved.favoriteDomains : []);
     } catch {}
@@ -48,6 +48,7 @@
     try {
       if (typeof localStorage === 'undefined') return;
       localStorage.setItem('tracelocal.inspector.layout', JSON.stringify({
+        layoutVersion: 2,
         paneWidths: state.paneWidths,
         columnWidths: state.columnWidths,
         favoriteDomains: [...state.favoriteDomains],
